@@ -1,6 +1,6 @@
 {
   "name": "ultracode",
-  "version": "0.3.0+codex.20260601",
+  "version": "0.3.0+codex.20260601140935",
   "description": "Fan out Codex subprocess workers for deep code investigation, planning, and review: a declarative pipeline DAG, an imperative Workflow-script runner, pluggable transports (exec / app-server), warm-context resume, transient-error retry, budgets, and journaled resume.",
   "author": {
     "name": "Just Every",
