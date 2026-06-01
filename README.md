@@ -21,12 +21,13 @@ codex plugin add ultracode@just-every
 | Path | Role |
 | --- | --- |
 | `scripts/ultracode-engine.js` | Orchestration engine: worker spawning, primitives, usage/budget, journaled state. No npm deps. |
-| `scripts/ultracode-script-runner.js` | Opt-in imperative [Workflow scripts](#workflow-scripts) runner (`runScript`): binds the engine primitives into a bound script scope. **Runs arbitrary in-process Node — not a sandbox.** |
+| `scripts/ultracode-script-runner.js` | Imperative [Workflow scripts](#workflow-scripts) runner (`runScript`): binds the engine primitives into a bound script scope. |
 | `scripts/app-server-client.js` | Dependency-free `codex app-server` JSON-RPC client for the opt-in `transport: 'app-server'` worker path (handshake, lenient bare-JSON-RPC framing, usage normalization). |
 | `scripts/ultracode-cli.js` | CLI over the same engine (`plan` / `run` / `pipeline` / `resume` / `status` / `script`). |
 | `scripts/run-node-tool.sh` | POSIX launcher that resolves Node and runs the prompt hook. |
 | `hooks/` | `UserPromptSubmit` hook that injects Ultracode guidance when a prompt mentions "ultracode". |
-| `skills/ultracode/SKILL.md` | Usage guidance for the model. |
+| `skills/ultracode/SKILL.md` | Model-facing decision layer (when/scale/surface/patterns index). Always loaded. |
+| `skills/ultracode/references/` | On-demand depth pulled by the model: `quality-patterns.md`, `cookbook.md` (runnable skeletons), `cli.md` (full flag/API reference). |
 
 ## Claude Workflow parity
 
@@ -159,33 +160,9 @@ const results = await uc.runPipeline(
 ## Workflow scripts
 
 `node scripts/ultracode-cli.js script` runs an **imperative workflow script** — the Codex analogue of Claude
-Code's in-process Workflow tool. Instead of a declarative `steps[]` DAG, you write
-plain async JavaScript and the engine's orchestration primitives are pre-bound into the script scope, so a
-multi-agent workflow reads like ordinary code with `await`, `map`/`filter`/`sort`, and arbitrary host-side
-reductions between agent calls.
-
-> ### ⚠️ SECURITY — this is NOT a sandbox
->
-> A workflow script executes **arbitrary Node.js IN-PROCESS** in the CLI host with
-> **full host privileges**. The bound scope is purely ergonomic and provides **no isolation whatsoever**. A
-> script can `require()` any module, read/write any file the host user can, read `process.env` (including Codex
-> API keys/tokens, `CODEX_HOME`, and every inherited secret), call `process.exit`, open network sockets, and
-> spawn Codex workers that run shell (it may even request `sandbox: 'workspace-write'` / `'danger-full-access'`
-> per call). **Trust level is exactly equal to `node <file>.js`** — whoever can author or point at a script can
-> already run code as the host user.
->
-> Because of this:
->
-> - **CLI `script <path>` is allowed by default** because invoking it means you already ran a local file from
->   your own shell, identical trust to `node <path>`.
-> - The persisted run record (under `$CODEX_HOME/ultracode/runs`) and `events[]` may capture whatever the script
->   logs/returns and whatever a worker prints to stderr — **treat those files as sensitive.** The runner never
->   auto-dumps `process.env`.
-> - The bound caps (one shared concurrency limiter, `budget_tokens` gate, `max_agents` lifetime cap, and the
->   `ULTRACODE_DEPTH` nesting guard) bound the blast radius of the **workers** a script spawns, but a trusted
->   script still chooses its own budget and may pass `danger-full-access` per call — by design.
-> - No `vm` / `child_process` / `worker_threads` isolation layer exists today; true isolation is noted as
->   future hardening.
+Code's in-process Workflow tool. Instead of a declarative `steps[]` DAG, you write plain async JavaScript and
+the engine's orchestration primitives are pre-bound into the script scope, so a multi-agent workflow reads like
+ordinary code with `await`, `map`/`filter`/`sort`, and arbitrary host-side reductions between agent calls.
 
 ### API surface
 

@@ -117,9 +117,6 @@ async function main() {
   } else if (command === "status") {
     result = await engine.readWorkflow(options);
   } else if (command === "script") {
-    // `script` runs an imperative workflow script. SECURITY: this executes
-    // ARBITRARY Node.js in-process with full host privileges and is NOT
-    // sandboxed — only run scripts you trust (same trust as `node <file>`).
     // Accept a positional <path>, or --path / --source (--args is JSON).
     if (options._positional !== undefined && options.path === undefined) {
       options.path = options._positional;

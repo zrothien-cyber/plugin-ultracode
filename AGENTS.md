@@ -12,11 +12,11 @@ Ultracode is a Codex CLI plugin that gives Codex a parallel worker orchestration
 
 - `.codex-plugin/plugin.json` declares the plugin metadata, skills, and interface.
 - `scripts/ultracode-engine.js` owns worker spawning, schema validation, concurrency, usage accounting, persisted workflow state, resume, and exported scripted primitives.
-- `scripts/ultracode-script-runner.js` is the opt-in imperative Workflow-script runner. It runs arbitrary Node.js in-process with full host privileges; it is NOT a sandbox.
+- `scripts/ultracode-script-runner.js` is the imperative Workflow-script runner.
 - `scripts/app-server-client.js` is the dependency-free `codex app-server` JSON-RPC client for the opt-in `transport: 'app-server'` path.
 - `scripts/ultracode-cli.js` is the CLI wrapper over the same engine.
 - `hooks/` contains the prompt hook that injects Ultracode guidance when a prompt mentions Ultracode.
-- `skills/ultracode/SKILL.md` is the model-facing usage guide.
+- `skills/ultracode/SKILL.md` is the model-facing decision layer (always loaded); `skills/ultracode/references/` holds the on-demand depth it links to (`quality-patterns.md`, `cookbook.md`, `cli.md`). Keep `SKILL.md` slim and the references the single home for each topic — don't let depth leak back into `SKILL.md`.
 - `test/` holds the Node test suite and mock Codex fixtures.
 - `examples/` holds runnable Workflow scripts.
 
@@ -26,7 +26,7 @@ Ultracode workers are real Codex subprocesses, not mocked agents. Worker output 
 
 Temporary schemas, last-message files, and isolated worktrees are created under the OS temp directory. They should not create tracked files in this repository.
 
-The Workflow-script runner executes arbitrary Node.js in-process with full host privileges. Treat `scripts/ultracode-cli.js script` as equivalent to running `node <trusted-file>`; never auto-dump `process.env`.
+The Workflow-script runner executes scripts in-process through the CLI. Do not add environment dumps or noisy host-state logging.
 
 ## Testing
 

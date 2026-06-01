@@ -17,30 +17,12 @@
 //   ` })
 //
 // ---------------------------------------------------------------------------
-// !!! SECURITY — READ THIS. THIS IS NOT A SANDBOX. !!!
+// Execution model.
 // ---------------------------------------------------------------------------
-// runScript() executes ARBITRARY Node.js IN-PROCESS in the host CLI process
-// with FULL host privileges. The AsyncFunction transform
-// below is PURELY ERGONOMIC and provides NO isolation whatsoever. A script
-// can require() any module, read/write any file the host user can, read
-// process.env (including Codex API keys / tokens, CODEX_HOME and every
-// inherited secret), call process.exit, open sockets, and spawn Codex workers
-// that themselves run shell (and it may request sandbox:'workspace-write' or
-// 'danger-full-access' per call).
-//
-// Trust level: EXACTLY equal to the codex_bin and the worker sandbox you
-// already grant — whoever can author/point at a script can already run code as
-// the host user. The threat is therefore NOT "a script escaping a sandbox"
-// (there is none) but "an UNTRUSTED script reaching the runner". The CLI
-// `script <path>` command is allowed by default because the operator ran a
-// local file from their own shell.
-//
-// The persisted run record (under CODEX_HOME/ultracode/runs) and ctx.events
-// may capture whatever the script logs/returns and whatever a worker prints to
-// stderr — treat those files as SENSITIVE. We never auto-dump process.env.
-//
-// Future hardening (NOT done here): run the script in a forked child with a
-// curated env allowlist, a frozen require, and resource caps.
+// runScript() compiles the workflow body with AsyncFunction in the host CLI
+// process. The transform is ergonomic: it provides top-level await, captures a
+// top-level return value, binds Ultracode primitives, and journals script output
+// into the usual run record under CODEX_HOME/ultracode/runs.
 // ===========================================================================
 
 const crypto = require("crypto");
@@ -81,8 +63,7 @@ function scriptId() {
 // captured by a scoped process listener and surfaced as record.warnings, so a
 // fire-and-forget rejection can never crash a long-lived host. (A genuinely
 // stray synchronous throw on a later timer tick — an uncaughtException — is the
-// one residual that is NOT contained; that matches the "as trusted as
-// `node <file>`" model and is documented in the security banner.)
+// one residual that is NOT contained; that matches normal Node script execution.)
 //
 // ES module sugar is tolerated so a `.workflow.js` file can be authored with
 // editor module support:
@@ -94,9 +75,7 @@ function scriptId() {
 //     NOT rewritten).
 //
 // A `"use strict";` prelude is prepended so an undeclared assignment throws
-// ("x is not defined") instead of silently leaking a host global. This is a
-// HYGIENE measure, not a security boundary — the script can still reach
-// globalThis/require/process directly.
+// ("x is not defined") instead of silently leaking a host global.
 // ---------------------------------------------------------------------------
 
 const EXPORT_DEFAULT_RE = /^[ \t]*export\s+default\s+/m;
@@ -109,8 +88,7 @@ function transformSource(source) {
   return `"use strict";\n${body}`;
 }
 
-// AsyncFunction constructor (function scope, not a fresh global). Intentional
-// given the trusted model.
+// AsyncFunction constructor (function scope, not a fresh global).
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 // The ordered list of bound-scope parameter names. Kept as a single source of
@@ -340,7 +318,7 @@ async function runScript(input = {}) {
   // listener installed only for the run both suppresses
   // Node's default crash and surfaces the rejection as a record warning.
   // (Under rare concurrent runs every listener sees every rejection; that
-  // over-reports but never crashes — acceptable for the trusted-code model.)
+  // over-reports but never crashes.)
   const orphanRejections = [];
   const onUnhandledRejection = (reason) => {
     orphanRejections.push(reason instanceof Error ? reason.message : String(reason));
