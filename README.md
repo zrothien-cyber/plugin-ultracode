@@ -7,6 +7,18 @@ Workers run as real `codex exec` subprocesses (read-only by default), return sch
 findings to the parent thread, and the parent synthesizes and implements so the meaningful edits stay visible
 in the Codex app/TUI.
 
+## Pair with Codex goals
+
+For complex Ultracode work, the parent Codex thread should usually set its own Codex goal before starting the
+fan-out. A goal is the parent thread's persistence guard: Codex keeps working until it explicitly marks that
+goal complete or blocked, which helps prevent an Ultracode-assisted investigation from ending after the worker
+summary but before synthesis, edits, and verification are truly done.
+
+Use the goal for the top-level outcome, not for individual workers. Ultracode workers run in separate Codex
+threads; they may have their own local state, but they are not responsible for clearing the parent task. The
+parent should create the goal, run Ultracode as needed, synthesize the worker evidence, apply changes, verify the
+result, and only then clear the goal.
+
 ## Install
 
 Add the Just Every plugin marketplace, then install Ultracode from it:
