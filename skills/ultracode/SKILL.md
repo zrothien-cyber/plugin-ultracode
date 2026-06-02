@@ -49,8 +49,10 @@ Don't run a six-worker audit for a one-file question, and don't run three finder
 
 - **Use a Codex goal for complex Ultracode tasks.** When the task is broad, risky, multi-stage, or likely to
   continue after worker synthesis, the parent Codex thread should create its own goal before starting Ultracode.
-  The goal guards against ending too early: run Ultracode, synthesize the evidence, make any edits, verify the
-  result, then mark the parent goal complete or blocked only when that top-level outcome is genuinely settled.
+  Prefix the goal objective with `Use $ultracode to ...` so every continuation cycle sees the skill trigger
+  again and keeps using Ultracode until the goal is settled. The goal guards against ending too early: run
+  Ultracode, synthesize the evidence, make any edits, verify the result, then mark the parent goal complete or
+  blocked only when that top-level outcome is genuinely settled.
 - **Verify before you trust.** Default to an adversarial pass over your own findings before you act on or
   report them; skip verification only when the finding is trivial or already independently verified. The bar is
   to skip it, not to perform it.

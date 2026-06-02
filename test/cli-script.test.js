@@ -37,6 +37,9 @@ test("CLI script <positional-path> --args runs via the mock and reaches the scri
   assert.strictEqual(code, 0, `cli exited 0 (stderr: ${stderr})`);
   const record = JSON.parse(stdout);
   assert.strictEqual(record.kind, "script");
+  assert.strictEqual(record.name, "Echo");
+  assert.strictEqual(record.slug, "echo");
+  assert.match(record.id, /-echo$/);
   assert.strictEqual(record.status, "completed");
   assert.strictEqual(record.result.who, "cli", "--args JSON reached the script scope");
 });

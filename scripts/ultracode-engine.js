@@ -10,6 +10,7 @@ const path = require("path");
 const util = require("util");
 
 const appServerClient = require("./app-server-client");
+const { workflowIdentity } = require("./run-identity");
 const { attachWorkflowUi, shouldLaunchUi } = require("./ultracode-ui-launcher");
 
 const execFileP = util.promisify(childProcess.execFile);
@@ -103,11 +104,6 @@ const VERDICT_SCHEMA = {
   },
   required: ["refuted", "reason"]
 };
-
-function workflowId() {
-  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
-  return `ultra-${stamp}-${crypto.randomBytes(3).toString("hex")}`;
-}
 
 function codexHome() {
   if (process.env.CODEX_HOME && process.env.CODEX_HOME.trim()) {
@@ -1997,7 +1993,14 @@ async function runExplicitWorkflow(input) {
   const specs = input.workers_spec.map((spec, index) => normalizeSpec(spec, index, defaults));
   const retryOpts = resolveRetryInput(input);
 
-  const id = workflowId();
+  const identity = workflowIdentity(
+    {
+      ...input,
+      labels: specs.map((spec) => spec.label)
+    },
+    "Explicit Workers"
+  );
+  const id = identity.id;
   const ctx = createContext({
     workflowId: id,
     concurrency: input.concurrency,
@@ -2018,6 +2021,8 @@ async function runExplicitWorkflow(input) {
   const transportStrict = resolveBool(firstDefined(input.transport_strict, input.transportStrict), false);
   const workflow = {
     id,
+    name: identity.name,
+    slug: identity.slug,
     status: "running",
     task: input.task || `${specs.length} explicit workers`,
     cwd,
@@ -2109,7 +2114,8 @@ async function runWorkflow(input = {}) {
 
   const options = normalizeOptions(input);
   const retryOpts = resolveRetryInput(input);
-  const id = workflowId();
+  const identity = workflowIdentity(input, "Worker Plan");
+  const id = identity.id;
   const ctx = createContext({
     workflowId: id,
     concurrency: input.concurrency,
@@ -2124,6 +2130,8 @@ async function runWorkflow(input = {}) {
   const now = new Date().toISOString();
   const workflow = {
     id,
+    name: identity.name,
+    slug: identity.slug,
     status: "running",
     task: options.task,
     cwd: options.cwd,
@@ -2742,7 +2750,14 @@ async function runPipelineSpec(input = {}) {
   const { compiled } = compileSteps(input.steps, defaults);
   const retryOpts = resolveRetryInput(input);
 
-  const id = workflowId();
+  const identity = workflowIdentity(
+    {
+      ...input,
+      labels: compiled.map((step) => step.label || step.id)
+    },
+    "Pipeline Run"
+  );
+  const id = identity.id;
   const ctx = createContext({
     workflowId: id,
     concurrency: input.concurrency,
@@ -2776,6 +2791,8 @@ async function runPipelineSpec(input = {}) {
   }));
   const workflow = {
     id,
+    name: identity.name,
+    slug: identity.slug,
     status: "running",
     task: input.task || `${compiled.length}-step pipeline`,
     cwd,
@@ -2872,6 +2889,7 @@ module.exports = {
   compactWorkflow,
   stateDir,
   statePathFor,
+  workflowIdentity,
   // orchestration primitives
   spawnWorker,
   spawnWarmWorker,

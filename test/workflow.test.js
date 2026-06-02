@@ -52,6 +52,9 @@ test("workers_spec: explicit path runs both specs (incl schema:null), stores spe
     );
 
     assert.strictEqual(wf.status, "completed");
+    assert.strictEqual(wf.name, "Alpha Beta");
+    assert.strictEqual(wf.slug, "alpha-beta");
+    assert.match(wf.id, /-alpha-beta$/);
     assert.strictEqual(wf.options.explicit, true);
     assert.strictEqual(wf.workers.length, 2);
     assert.ok(wf.workers.every((w) => w.status === "completed"));

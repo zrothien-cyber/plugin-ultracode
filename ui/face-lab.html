@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ultracode Face Lab</title>
+    <link rel="stylesheet" href="/face-lab.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/three.module.min.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p>Ultracode orb face lab</p>
+        <h1>Official decal face with surface projections</h1>
+      </header>
+      <section class="prototype-card" aria-label="Official DecalGeometry orb prototype">
+        <div class="orb-host" id="official-decal-orb"></div>
+        <div class="notes">
+          <h2>CanvasTexture + Official DecalGeometry</h2>
+          <p id="effect-description">Pick an effect to preview it on the orb.</p>
+          <div class="effect-controls" id="effect-controls" aria-label="Orb effect picker"></div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/face-lab.js"></script>
+  </body>
+</html>

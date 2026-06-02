@@ -1,26 +1,44 @@
-import { Activity, AlertTriangle, CheckCircle2, Clock3, RefreshCcw, XCircle } from "./icons.js";
-import { DetailPanel } from "./detail-panel.js";
+import { Activity, AlertTriangle, CheckCircle2, CircleSlash, Clock3, Hourglass, Pause, RefreshCcw } from "./icons.js";
+import { InspectorPanel } from "./inspector-panel.js";
+import { JournalPanel } from "./journal-panel.js";
 import { WorkflowGraph } from "./graph.js";
-import { fetchJson, formatDate, formatDuration, normalizeWorkflow, totalTokens, workflowIdFromLocation } from "./state.js";
+import { RunSwitcher } from "./run-switcher.js";
+import { fetchJson, formatDuration, normalizeWorkflow, totalTokens, workflowIdFromLocation } from "./state.js";
 
 const React = window.React;
 const { useEffect, useMemo, useState } = React;
 const { createRoot } = window.ReactDOM;
 const h = React.createElement;
 
-function StatusPill({ status }) {
-  const icons = {
-    completed: h(CheckCircle2, { size: 16 }),
-    failed: h(XCircle, { size: 16 }),
-    cancelled: h(AlertTriangle, { size: 16 }),
-    running: h(Activity, { size: 16 }),
-    pending: h(Clock3, { size: 16 })
-  };
-  return h("span", { className: `status-pill status-${status || "pending"}` }, icons[status] || icons.pending, status || "pending");
+const SUMMARY_ITEMS = [
+  { key: "running", label: "Running", icon: Activity },
+  { key: "completed", label: "Done", icon: CheckCircle2 },
+  { key: "failed", label: "Failed", icon: AlertTriangle },
+  { key: "pending", label: "Pending", icon: Clock3 },
+  { key: "cancelled", label: "Cancelled", icon: CircleSlash }
+];
+
+function statusSentence(graph) {
+  const agents = graph.nodes.length || 0;
+  const failed = graph.counts.failed || 0;
+  const groups = graph.phases.length || 0;
+  return h(
+    "p",
+    { className: "status-sentence" },
+    `${agents} agents across ${groups} groups`,
+    failed ? h("span", { className: "failure-note" }, ` / ${failed} failures need review`) : h("span", null, " / no failures")
+  );
 }
 
-function Stat({ label, value, tone }) {
-  return h("div", { className: `stat ${tone || ""}` }, h("span", null, label), h("strong", null, value));
+function Stat({ label, value, status, icon }) {
+  const Icon = icon;
+  return h(
+    "div",
+    { className: `stat status-${status || "neutral"}` },
+    h("span", { className: "stat-icon" }, Icon ? h(Icon, { size: 28, strokeWidth: 2 }) : null),
+    h("strong", null, value),
+    h("span", { className: "stat-label" }, label)
+  );
 }
 
 function TopBar({ record, graph, onRefresh, refreshing, error }) {
@@ -28,68 +46,45 @@ function TopBar({ record, graph, onRefresh, refreshing, error }) {
     record && record.started_at
       ? record.duration_ms || (record.completed_at ? Date.parse(record.completed_at) - Date.parse(record.started_at) : Date.now() - Date.parse(record.started_at))
       : null;
+  const title = record && (record.name || record.display_name || record.task) ? record.name || record.display_name || record.task : record && record.id ? record.id : "Workflow Monitor";
+  const id = record && record.id ? record.id : "latest";
+  const cwd = record && record.cwd ? record.cwd : "workspace";
+  const canPause = Boolean(record && (record.status === "running" || graph.counts.running > 0));
+
   return h(
     "header",
     { className: "topbar" },
     h(
       "div",
       { className: "title-block" },
-      h("div", { className: "brand-row" }, h("span", { className: "brand-mark" }, "U"), h("span", null, "Ultracode")),
-      h("h1", null, record && record.task ? record.task : record && record.id ? record.id : "Workflow Monitor"),
-      h(
-        "p",
-        null,
-        record
-          ? `${record.id} · ${record.cwd || "workspace"}`
-          : error
-            ? error
-            : "Waiting for an Ultracode workflow record."
-      )
+      h("div", { className: "breadcrumb" }, `~/runs / ultracode / ${id}`),
+      h("h1", null, title),
+      record ? statusSentence(graph) : h("p", { className: "status-sentence" }, error || `Waiting for a workflow record in ${cwd}.`)
     ),
     h(
       "div",
       { className: "topbar-actions" },
-      h(StatusPill, { status: record && record.status }),
+      canPause
+        ? h(
+            "button",
+            { className: "primary-control", type: "button", disabled: true, title: "Workflow pause is not exposed by the UI server." },
+            h(Pause, { size: 19 }),
+            "Pause workflow"
+          )
+        : null,
       h(
         "button",
-        { className: "icon-button", type: "button", onClick: onRefresh, title: "Refresh workflow", disabled: refreshing },
+        { className: "icon-button", type: "button", onClick: onRefresh, title: "Refresh workflow status", "aria-label": "Refresh workflow status", disabled: refreshing },
         h(RefreshCcw, { size: 18, className: refreshing ? "spin" : "" })
       )
     ),
     h(
       "div",
       { className: "stats-strip" },
-      h(Stat, { label: "Agents", value: graph.nodes.length }),
-      h(Stat, { label: "Running", value: graph.counts.running || 0, tone: "live" }),
-      h(Stat, { label: "Done", value: graph.counts.completed || 0, tone: "done" }),
-      h(Stat, { label: "Failed", value: (graph.counts.failed || 0) + (graph.counts.cancelled || 0), tone: "danger" }),
-      h(Stat, { label: "Tokens", value: totalTokens(record).toLocaleString() }),
-      h(Stat, { label: "Elapsed", value: formatDuration(duration) || "0s" })
+      SUMMARY_ITEMS.map((item) => h(Stat, { key: item.key, label: item.label, value: graph.counts[item.key] || 0, status: item.key, icon: item.icon })),
+      h(Stat, { label: "Elapsed", value: formatDuration(duration) || "0s", status: "elapsed", icon: Hourglass }),
+      h(Stat, { label: "Tokens", value: totalTokens(record).toLocaleString(), status: "tokens", icon: Activity })
     )
-  );
-}
-
-function RunsList({ runs, activeId, onSelect }) {
-  return h(
-    "nav",
-    { className: "runs-list", "aria-label": "Ultracode runs" },
-    h("h2", null, "Runs"),
-    runs.length
-      ? runs.map((run) =>
-          h(
-            "button",
-            {
-              key: run.id,
-              className: `run-row${run.id === activeId ? " active" : ""} status-${run.status || "pending"}`,
-              type: "button",
-              onClick: () => onSelect(run.id),
-              title: run.task || run.id
-            },
-            h("span", { className: "run-dot" }),
-            h("span", { className: "run-copy" }, h("strong", null, run.task || run.id), h("small", null, `${run.status || "pending"} · ${formatDate(run.updated_at || run.started_at)}`))
-          )
-        )
-      : h("p", { className: "muted" }, "No runs found.")
   );
 }
 
@@ -100,6 +95,7 @@ function App() {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState(null);
   const graph = useMemo(() => normalizeWorkflow(record || {}), [record]);
   const selected = graph.nodes.find((node) => node.id === selectedId) || graph.nodes[0] || null;
 
@@ -112,10 +108,12 @@ function App() {
       setRuns(Array.isArray(list.workflows) ? list.workflows : []);
       setWorkflowId(nextRecord.id);
       setError("");
-      if (!selectedId && Array.isArray(nextRecord.workers) && nextRecord.workers.length > 0) {
+      setSelectedId((current) => {
+        if (current) return current;
+        if (!Array.isArray(nextRecord.workers) || nextRecord.workers.length === 0) return current;
         const first = nextRecord.workers[0];
-        setSelectedId(first.id || first.step_id || null);
-      }
+        return first.id || first.step_id || null;
+      });
       if (window.location.pathname !== `/workflow/${nextRecord.id}`) {
         window.history.replaceState(null, "", `/workflow/${nextRecord.id}`);
       }
@@ -134,21 +132,46 @@ function App() {
 
   function selectRun(id) {
     setSelectedId(null);
+    setSelectedEvent(null);
     setWorkflowId(id);
     window.history.replaceState(null, "", `/workflow/${id}`);
+  }
+
+  function revealInspector() {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.querySelector(".inspector-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }
+
+  function inspectAgent(id) {
+    setSelectedId(id);
+    setSelectedEvent(null);
+    revealInspector();
+  }
+
+  function inspectJournal(workerId, event) {
+    if (workerId) setSelectedId(workerId);
+    setSelectedEvent(event || null);
+    revealInspector();
   }
 
   return h(
     "main",
     { className: "app-shell" },
+    h(RunSwitcher, { runs, activeId: record && record.id, onSelect: selectRun }),
     h(TopBar, { record, graph, onRefresh: () => load(workflowId), refreshing, error }),
     error ? h("div", { className: "error-banner" }, h(AlertTriangle, { size: 18 }), h("span", null, error)) : null,
+    h(WorkflowGraph, { record: record || {}, graph, selectedId: selected && selected.id, onSelect: inspectAgent }),
+    h(InspectorPanel, { selected, selectedEvent }),
+    h(JournalPanel, { graph, selectedEvent, onInspect: inspectJournal }),
     h(
-      "div",
-      { className: "workspace" },
-      h(RunsList, { runs, activeId: record && record.id, onSelect: selectRun }),
-      h(WorkflowGraph, { record: record || {}, graph, selectedId: selected && selected.id, onSelect: setSelectedId }),
-      h(DetailPanel, { selected, events: graph.events, record })
+      "footer",
+      { className: "app-footer" },
+      h("span", null, "ULTRACODE"),
+      h("span", null, "Local Operations Interface for Codex Workers"),
+      h("span", null, record && record.started_at ? `Run ID: ${record.id} / Started ${new Date(record.started_at).toLocaleTimeString()}` : "Run ID: pending")
     )
   );
 }

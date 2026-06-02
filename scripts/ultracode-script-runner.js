@@ -25,7 +25,6 @@
 // into the usual run record under CODEX_HOME/ultracode/runs.
 // ===========================================================================
 
-const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
 
@@ -38,21 +37,13 @@ const { attachWorkflowUi, shouldLaunchUi } = require("./ultracode-ui-launcher");
 const engine = require("./ultracode-engine");
 
 // ---------------------------------------------------------------------------
-// Local helpers (the engine does NOT export writeJson or its id minter, so we
-// re-implement the same 3-line write and the same ultra-<stamp>-<hex> id shape
-// here to avoid widening the engine surface or churning it beyond one line).
-// The id shape MUST match engine.statePathFor()'s runs-dir convention so the
-// status / resume tools can read script records.
+// Local persistence helper. Script ids come from the engine's workflowIdentity()
+// helper so every Ultracode surface journals the same readable id/name shape.
 // ---------------------------------------------------------------------------
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function scriptId() {
-  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
-  return `ultra-${stamp}-${crypto.randomBytes(3).toString("hex")}`;
 }
 
 function makeScriptPersister(record, ctx) {
@@ -295,7 +286,8 @@ async function runScript(input = {}) {
   // does not depend on where the file lives on disk.
   const source = hasSource ? input.source : await fs.readFile(path.resolve(input.path), "utf8");
 
-  const id = scriptId();
+  const identity = engine.workflowIdentity(input, "Script Run");
+  const id = identity.id;
   let record = null;
   let persister = null;
   let ctx = null;
@@ -347,6 +339,8 @@ async function runScript(input = {}) {
 
   record = {
     id,
+    name: identity.name,
+    slug: identity.slug,
     kind: "script",
     status: "running",
     started_at: startedAt,

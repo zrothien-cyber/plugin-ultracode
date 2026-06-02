@@ -32,11 +32,26 @@ export function compactText(value, limit = 280) {
   return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
 }
 
+export function fullText(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && typeof value.summary === "string" && Object.keys(value).length === 1) return value.summary;
+  return JSON.stringify(value, null, 2);
+}
+
 export function outputText(worker) {
   if (!worker) return "";
   if (worker.error) return worker.error;
   if (worker.result !== undefined && worker.result !== null) return compactText(worker.result, 900);
   if (worker.value !== undefined && worker.value !== null) return compactText(worker.value, 900);
+  return "";
+}
+
+export function fullOutputText(worker) {
+  if (!worker) return "";
+  if (worker.error) return worker.error;
+  if (worker.result !== undefined && worker.result !== null) return fullText(worker.result);
+  if (worker.value !== undefined && worker.value !== null) return fullText(worker.value);
   return "";
 }
 

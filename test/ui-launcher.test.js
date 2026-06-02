@@ -81,7 +81,14 @@ test("runWorkflow ui:true launches the dashboard server and serves the workflow 
       assert.strictEqual(htmlResponse.status, 200);
       assert.match(await htmlResponse.text(), /Ultracode Run/);
 
-      for (const asset of ["/app.js", "/styles.css", "/vendor/react.production.min.js", "/vendor/react-dom.production.min.js"]) {
+      for (const asset of [
+        "/app.js",
+        "/styles.css",
+        "/vendor/react.production.min.js",
+        "/vendor/react-dom.production.min.js",
+        "/vendor/three.module.min.js",
+        "/vendor/three.core.min.js"
+      ]) {
         const assetResponse = await fetch(`${record.ui.server_url}${asset}`);
         assert.strictEqual(assetResponse.status, 200, `${asset} is served`);
       }

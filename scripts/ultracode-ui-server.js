@@ -4,6 +4,7 @@
 const fs = require("fs/promises");
 const http = require("http");
 const path = require("path");
+const { displayRunName } = require("./run-identity");
 
 const STATIC_DIR = path.join(__dirname, "..", "ui");
 const MIME = new Map([
@@ -90,8 +91,12 @@ async function workflowById(id) {
 
 function summarize(record, stat) {
   const workers = Array.isArray(record.workers) ? record.workers : [];
+  const displayName = displayRunName(record);
   return {
     id: record.id,
+    name: record.name || null,
+    display_name: displayName,
+    slug: record.slug || null,
     kind: record.kind || (record.options && record.options.pipeline ? "pipeline" : "run"),
     status: record.status,
     task: record.task || null,
@@ -120,6 +125,15 @@ async function listWorkflows() {
     }
   }
   return records;
+}
+
+function enrichWorkflow(record) {
+  if (!record || typeof record !== "object") return record;
+  if (record.display_name) return record;
+  return {
+    ...record,
+    display_name: displayRunName(record)
+  };
 }
 
 async function serveStatic(res, pathname) {
@@ -166,7 +180,7 @@ async function handle(req, res) {
       json(res, 404, { error: "No Ultracode workflow records found.", runs_dir: runsDir });
       return;
     }
-    json(res, 200, record);
+    json(res, 200, enrichWorkflow(record));
     return;
   }
   const workflowMatch = /^\/api\/workflows\/([^/]+)$/.exec(pathname);
@@ -176,7 +190,7 @@ async function handle(req, res) {
       json(res, 404, { error: "Workflow record not found.", id: workflowMatch[1] });
       return;
     }
-    json(res, 200, record);
+    json(res, 200, enrichWorkflow(record));
     return;
   }
   if (pathname === "/" || pathname.startsWith("/workflow/")) {
