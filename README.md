@@ -33,7 +33,8 @@ codex plugin add ultracode@just-every
 | Path | Role |
 | --- | --- |
 | `scripts/ultracode-engine.js` | Orchestration engine: worker spawning, primitives, usage/budget, journaled state. No npm deps. |
-| `scripts/ultracode-script-runner.js` | Imperative [Workflow scripts](#workflow-scripts) runner (`runScript`): binds the engine primitives into a bound script scope. |
+| `scripts/ultracode-script-runner.js` | Imperative [Workflow scripts](#workflow-scripts) runner (`runScript`): binds the engine primitives into a bound script scope, snapshots the source, and supports explicit cached-call resume. |
+| `scripts/workflow-definitions.js` / `scripts/claude-workflow-compat.js` | Claude-style saved workflow discovery, `meta` extraction, compatibility diagnostics, and `.claude/workflows` persistence. |
 | `scripts/ultracode-ui-launcher.js` / `scripts/ultracode-ui-server.js` | Local dashboard launcher and dependency-free HTTP server over the persisted workflow journal. |
 | `scripts/app-server-client.js` | Dependency-free `codex app-server` JSON-RPC client for the opt-in `transport: 'app-server'` worker path (handshake, lenient bare-JSON-RPC framing, usage normalization). |
 | `scripts/ultracode-cli.js` | CLI over the same engine (`plan` / `run` / `pipeline` / `resume` / `status` / `script`). |
@@ -66,9 +67,14 @@ of `codex exec` subprocesses:
 | `args` threaded to stages | `args` in the script scope + stage callbacks receive `(prev, item, index, ctx)` | ✅ |
 | Imperative `agent()` / `parallel()` / `pipeline()` / `phase()` / `log()` / `budget` script | **`ultracode-cli.js script`** (the [_Workflow scripts_](#workflow-scripts) runner) | ✅ |
 | `workflow()` nested sub-step | one-level nesting enforced via `ULTRACODE_DEPTH` depth guard (deeper nesting refused + logged) | ◐ partial |
+| Saved `.claude/workflows/*.js` commands | CLI `workflow list/show/run/save/update/delete`, project before user before `$CODEX_HOME/ultracode/workflows` | ✅ |
+| `export const meta = { name, description, phases }` | parsed, preserves phase `detail`, visible in UI, and used for named workflow identity | ✅ |
+| `export async function run(context)` | invoked automatically in Claude-compat mode; `context.args`, `context.cwd`, `context.workflow`, `context.phase`, `context.log`, `context.budget` are bound | ✅ |
+| Workflow primitive imports | imports from `claude/workflow(s)` / `@anthropic-ai/claude-code/workflow(s)` are rewritten to the bound primitives, including aliases and namespace imports | ✅ |
+| `resumeFromRunId` cached agent calls | `resume_from_run_id` reuses completed script `agent()`/`spawnWorker()` calls when prompt+options hash matches | ◐ partial |
 
 **Reachability.** Every primitive above is exported from `scripts/ultracode-engine.js` and is now reachable
-through three layered surfaces, in increasing order of expressiveness:
+through four layered surfaces, in increasing order of expressiveness:
 
 1. **CLI `run`** — the fixed-role and `workers_spec` flat fan-out (all peers at once, no data flow).
 2. **CLI `pipeline`** — a declarative `steps[]` DAG that compiles `parallel` / `pipeline` / `verify` / `loop`
@@ -77,9 +83,12 @@ through three layered surfaces, in increasing order of expressiveness:
    runner: plain async JavaScript with `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()`, `budget`, and
    `args` bound into scope. This is the closest analogue to Claude Code's in-process Workflow tool and is the only
    surface that combines the primitives with arbitrary host-side control flow and reductions.
+4. **CLI `workflow`** — saved Claude-style workflow definitions under `.claude/workflows`, `~/.claude/workflows`,
+   or `$CODEX_HOME/ultracode/workflows`, with strict compatibility diagnostics before execution.
 
-All three paths run through the same shared limiter, budget, and progress sink. The `pipeline()` / `parallel()` /
-`args`-to-stages rows that were previously engine-API-only are now reachable end-to-end via the script runner.
+The execution paths run through the same shared limiter, budget, and progress sink. The `pipeline()` /
+`parallel()` / `args`-to-stages rows that were previously engine-API-only are now reachable end-to-end via the
+script runner.
 
 ### Declarative pipeline DAG (`pipeline`)
 
@@ -146,12 +155,15 @@ Declarative DAG: review, then adversarially verify its findings:
 node scripts/ultracode-cli.js pipeline --steps '[{"id":"a","prompt":"..."},{"id":"b","prompt":"use {{steps.a.summary}}","depends_on":["a"]}]' --progress
 ```
 
-Resume, status, and imperative Workflow scripts:
+Resume, status, saved workflow definitions, and imperative Workflow scripts:
 
 ```bash
 node scripts/ultracode-cli.js resume --workflow-id ultra-... --force-steps '["1"]'
 node scripts/ultracode-cli.js status --workflow-id ultra-...
 node scripts/ultracode-cli.js script <path> --args '{"files":["a.js"]}'   # imperative Workflow script (see below)
+node scripts/ultracode-cli.js workflow list
+node scripts/ultracode-cli.js workflow run deep-research --args '{"topic":"..."}'
+node scripts/ultracode-cli.js workflow save deep-research --workflow-id ultra-...
 ```
 
 ### Run dashboard
@@ -212,6 +224,8 @@ ordinary code with `await`, `map`/`filter`/`sort`, and arbitrary host-side reduc
 | --- | --- |
 | `source` **xor** `path` | the script body inline, **or** a path to a `.js`/`.workflow.js` file. Exactly one is required (both/neither throws). `path` is read by **contents** (dirname-independent). |
 | `args` | arbitrary object exposed to the script as the bound `args`. |
+| `resume_from_run_id` / `resumeFromRunId` | explicit cached-call resume: completed prior script worker calls are reused only when their prompt+options cache key matches. |
+| `claude_compat` / `claudeCompat` | enables strict Claude saved-workflow diagnostics and adapters before execution: allowed workflow imports are rewritten, `run(context)` is invoked, and direct workflow-side filesystem/shell/host access fails before workers spawn. |
 | `cwd` | workspace directory for child workers. |
 | `concurrency` / `budget_tokens` / `max_agents` / `launch_stagger_ms` | the shared limiter / soft token cap / lifetime spawn cap / tiny per-workflow subprocess launch stagger (same semantics as CLI `run`). |
 | `max_retries` / `base_delay_ms` / `max_delay_ms` / `retry_jitter` | journaled into `options`. |
@@ -230,7 +244,9 @@ ordinary code with `await`, `map`/`filter`/`sort`, and arbitrary host-side reduc
 | `adversarialVerify(findings, opts?)` | keep only findings that survive a majority refute vote. |
 | `log(message, data?)` | narrator line into `events[]`. |
 | `phase(title)` | sets a closure-tracked phase used as the default `phase` for subsequent worker-spawning primitives. |
-| `workflow(pathOrSource, args?)` | one-level **nested** `runScript`, guarded by `ULTRACODE_DEPTH`; beyond depth 1 it throws `nested script workflows beyond depth 1 are not supported`. |
+| `workflow(pathOrSource, args?)` | one-level **nested** `runScript`, guarded by `ULTRACODE_DEPTH`; a bare name resolves saved workflow definitions by the same precedence as `workflow run`; beyond depth 1 it throws `nested script workflows beyond depth 1 are not supported`. |
+| `context` | Claude-compatible object with `args`, `cwd`, `workflow`, `phase`, `log`, and `budget`. It does not expose filesystem or shell helpers. |
+| `orchestrator` | namespace alias for the bound primitives (`agent`, `parallel`, `pipeline`, `phase`, `log`, `workflow`, etc.). |
 | `budget` | `{ total, spent(), remaining() }`. |
 | `args` | the `input.args` object. |
 | `ctx` | the shared context (advanced). |
@@ -253,8 +269,12 @@ numbers will not match the source.
   "options": { "concurrency": 4, "budget_tokens": null, "max_agents": 1000, "launch_stagger_ms": 25,
                "max_retries": null, "base_delay_ms": null, "max_delay_ms": null, "retry_jitter": null },
   "state_path": "$CODEX_HOME/ultracode/runs/ultra-....json",
+  "script_path": "$CODEX_HOME/ultracode/scripts/ultra-....workflow.js",
+  "source_path": "/path/to/source.workflow.js",
+  "source_hash": "sha256...",
+  "meta": { "name": "Example", "description": "...", "phases": [{ "title": "Inspect", "detail": "..." }] },
   "workers": [              // dynamic workers spawned by agent/helper primitives
-    { "id": "worker-1", "status": "completed", "phase": "inspect", "result": {}, "value": {} }
+    { "id": "worker-1", "status": "completed", "phase": "inspect", "cache_key": "...", "result": {}, "value": {} }
   ],
   "result": { /* the script's return value */ },
   "events": [ /* narrator log */ ],
@@ -265,7 +285,34 @@ numbers will not match the source.
 A throwing or syntactically broken script never crashes the host: execution is wrapped in `try`/`catch`, so the
 record is journaled with `status: "failed"`, the `error` message, and the partial `events` written so far. The
 record is read by CLI `status` (and `readWorkflow`) unchanged; CLI `resume` degrades to a clean
-"nothing to resume" message because `workers` is `[]` (a script is not step-resumable).
+"nothing to resume" message because an arbitrary script body is not step-resumable.
+
+Script runs now snapshot the source under `$CODEX_HOME/ultracode/scripts/` and record the original source path,
+`source_hash`, parsed Claude `meta`, and optional saved-workflow `definition_ref`. When `resume_from_run_id` is
+provided, unchanged completed `agent()` / `spawnWorker()` calls are returned from the prior run record without
+spawning a new Codex worker. This is intentionally narrower than full arbitrary-JS resume: changed call keys run
+live, and uncheckpointed host-side JavaScript still executes normally.
+
+## Saved workflow definitions
+
+`workflow` commands discover Claude-style JavaScript workflows in this order:
+
+1. `<cwd>/.claude/workflows/*.js`
+2. `~/.claude/workflows/*.js`
+3. `$CODEX_HOME/ultracode/workflows/*.js`
+
+Project workflows win when names collide. `export const meta = { name, description, phases }` is parsed as a
+pure object literal and preserved in run records, including simple scalar fields on phase objects such as
+`detail`. In Claude-compat mode, allowed workflow-primitive imports are rewritten to the bound runtime,
+`export async function run(context)` is invoked automatically, `orchestrator.*` maps to the primitive namespace,
+and unsupported direct workflow-side filesystem/shell/host access fails before workers spawn.
+
+The dashboard exposes the same library through `GET /api/workflow-definitions`,
+`GET /api/workflow-definitions/:id`, `POST /api/workflow-definitions`,
+`PUT /api/workflow-definitions/:id`, `DELETE /api/workflow-definitions/:id`, and
+`POST /api/workflow-definitions/:id/run`. The React UI lists saved definitions, shows metadata/phases/source,
+saves a script run as a project workflow, edits/deletes definitions, and runs a selected definition with JSON
+`args`.
 
 ### Example (mirroring a Claude workflow)
 

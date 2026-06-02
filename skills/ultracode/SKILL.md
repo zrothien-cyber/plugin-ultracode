@@ -8,9 +8,9 @@ description: Use when the user asks for Ultracode, deep parallel code investigat
 Ultracode gives Codex an orchestration engine that mirrors Claude Code's Workflow tool — `spawnWorker` (agent),
 `runParallel` (fan out, wait for all), `runPipeline` (stream each item stage-to-stage), schema-validated
 structured output, a shared concurrency cap, token-budget gating, progress events, journaled resume, and
-quality helpers — all driven by real `codex exec` subprocesses. Three surfaces reach it: a fixed-role /
-`workers_spec` fan-out (`run`), a declarative DAG (`pipeline`), and an imperative Workflow-script runner
-(`script`).
+quality helpers — all driven by real `codex exec` subprocesses. Four surfaces reach it: a fixed-role /
+`workers_spec` fan-out (`run`), a declarative DAG (`pipeline`), an imperative Workflow-script runner
+(`script`), and Claude-style saved workflow definitions (`workflow`).
 
 This file is the **decision layer** — read it to decide whether, at what scale, and with which surface to use
 Ultracode. Pull depth from `references/` only when you're actually building:
@@ -72,7 +72,7 @@ Don't run a six-worker audit for a one-file question, and don't run three finder
 
 ## Pick a surface
 
-Three surfaces reach the same engine, in increasing expressiveness. Default to the barrier-free ones.
+Four surfaces reach the same engine, in increasing expressiveness. Default to the barrier-free ones.
 
 - **`run`** — a flat fan-out: every worker runs at once and you get all results back together (one barrier at
   the end). Use for a single bounded pass with no data flow between workers — a fixed-role review, or a
@@ -84,6 +84,10 @@ Three surfaces reach the same engine, in increasing expressiveness. Default to t
   `loopUntilDry`, `adversarialVerify`, `budget`, …). The only surface that combines agents with arbitrary
   host-side control flow — loops, `map`/`filter`/`sort`, reductions, budget-driven branching. Reach for it when
   the orchestration logic itself is dynamic.
+- **`workflow`** — saved Claude-style workflow definitions. Use when the user wants `.claude/workflows`
+  compatibility, slash-command-like named runs, or to save/re-run a script. It discovers project definitions
+  before user and `$CODEX_HOME` definitions, parses `export const meta`, supports Claude-compatible
+  `run(context)` and workflow primitive imports, and fails explicitly on direct workflow-side host access.
 
 **Barrier vs barrier-free.** Prefer barrier-free staging (`pipeline` DAG, or the script `pipeline()`), where
 each item streams through every stage independently. *Why it's the default:* a barrier-free pipeline's

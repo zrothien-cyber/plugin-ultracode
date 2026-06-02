@@ -282,6 +282,11 @@ function defaultConcurrency() {
   return Math.max(1, Math.min(16, cpus - 2));
 }
 
+function normalizeConcurrency(value) {
+  if (value === undefined || value === null || value === "") return defaultConcurrency();
+  return Math.max(1, Math.min(16, Math.floor(Number(value)) || 1));
+}
+
 // Dependency-free promise pool / semaphore. Bounds the number of `codex exec`
 // subprocesses that run at once across every primitive in a single run.
 function createLimiter(maxConcurrent) {
@@ -368,7 +373,7 @@ function sumUsageFromWorkers(workers) {
 // Per-run context: shared limiter, usage accumulator, budget gate, lifetime
 // agent cap, and progress sink. Threaded into every spawn/primitive.
 function createContext(opts = {}) {
-  const concurrency = opts.concurrency ? Math.max(1, Math.floor(Number(opts.concurrency))) : defaultConcurrency();
+  const concurrency = normalizeConcurrency(opts.concurrency);
   const usageTotals = emptyUsage();
   const budgetTotal =
     opts.budgetTokens === undefined || opts.budgetTokens === null || opts.budgetTokens === ""
@@ -683,7 +688,9 @@ function createWorkerMeta(ctx, prompt, opts) {
       isolation: opts.isolation || null,
       executor: opts.executor || "cold",
       transport: opts.transport || "exec"
-    }
+    },
+    ...(opts.script_call_id ? { script_call_id: opts.script_call_id } : {}),
+    ...(opts.cache_key ? { cache_key: opts.cache_key } : {})
   };
 }
 
@@ -1006,7 +1013,9 @@ function resolveWorkerOpts(opts = {}) {
     retryJitter: resolveBool(firstDefined(opts.retryJitter, opts.retry_jitter), true),
     label: opts.label || opts.title || "worker",
     phase: opts.phase || null,
-    isolation: opts.isolation === "worktree" ? "worktree" : undefined
+    isolation: opts.isolation === "worktree" ? "worktree" : undefined,
+    script_call_id: opts.script_call_id || null,
+    cache_key: opts.cache_key || null
   };
 }
 

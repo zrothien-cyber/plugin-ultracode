@@ -14,10 +14,18 @@ const STATUS_SPEED = {
   cancelled: 0.08
 };
 
-const CLICK_EFFECTS = ["dyson", "alien-civilization", "earth", "water", "glass", "dot-points", "mesh", "fire"];
+const CLICK_EFFECTS = ["dyson", "alien-civilization", "earth", "water", "glass", "dot-points", "mesh", "fire", "rainbow-bands"];
 const SUCCESS_EFFECTS = ["earth", "water", "dyson", "dot-points"];
 const RUNNING_EFFECTS = ["mesh", "dot-points"];
 const ERROR_EFFECTS = ["error-mesh", "fire"];
+
+const STATUS_ORB_STYLES = {
+  completed: { color: 0x31c978, roughness: 0.54, metalness: 0.1, emissive: 0x0f6b3b, emissiveIntensity: 0.2, opacity: 1 },
+  failed: { color: 0x7d302b, roughness: 0.6, metalness: 0.14, emissive: 0x4b0d0a, emissiveIntensity: 0.2, opacity: 1 },
+  running: { color: 0x315f8f, roughness: 0.62, metalness: 0.14, emissive: 0x0f2f59, emissiveIntensity: 0.16, opacity: 1 },
+  cancelled: { color: 0x555a58, roughness: 0.76, metalness: 0.08, emissive: 0x111111, emissiveIntensity: 0.06, opacity: 1 },
+  pending: { color: 0x50504e, roughness: 0.7, metalness: 0.18, emissive: 0x111111, emissiveIntensity: 0.08, opacity: 1 }
+};
 
 function telemetryFrom(record, graph) {
   const counts = graph?.counts || {};
@@ -110,8 +118,26 @@ function createOrbScene(host, initialTelemetry) {
   };
   let frame = 0;
 
+  function setHostEffect(effectId) {
+    host.classList.toggle("effect-rainbow", effectId === "rainbow-bands");
+  }
+
+  function applyStatusOrbStyle(status) {
+    const style = STATUS_ORB_STYLES[status] || STATUS_ORB_STYLES.pending;
+    orbMaterial.color.setHex(style.color);
+    orbMaterial.roughness = style.roughness;
+    orbMaterial.metalness = style.metalness;
+    orbMaterial.emissive.setHex(style.emissive);
+    orbMaterial.emissiveIntensity = style.emissiveIntensity;
+    orbMaterial.opacity = style.opacity;
+    orbMaterial.transparent = style.opacity < 1;
+    orbMaterial.depthWrite = style.opacity >= 0.95;
+    orbMaterial.needsUpdate = true;
+  }
+
   function applyVisual(effectId, mood, elapsed, ttl = 2.8) {
     const active = effectManager.setActive(effectId);
+    setHostEffect(effectId);
     face.setFaceStyle(active.faceStyle);
     face.setMood(mood);
     face.burst(mood);
@@ -139,8 +165,10 @@ function createOrbScene(host, initialTelemetry) {
     const mood = moodForStatus(state.telemetry.status);
     if (effectManager.activeId !== "neutral") {
       const active = effectManager.setActive("neutral");
+      setHostEffect("neutral");
       face.setFaceStyle(active.faceStyle);
     }
+    applyStatusOrbStyle(state.telemetry.status);
     face.setMood(mood);
     state.mood = mood;
   }
@@ -184,14 +212,16 @@ function createOrbScene(host, initialTelemetry) {
       state.eventEffectUntil = 0;
       state.suppressedReactionUntil = elapsed + 4;
       const active = effectManager.setActive("neutral", { immediate: true });
+      setHostEffect("neutral");
       const mood = moodForStatus(state.telemetry.status);
       face.setFaceStyle(active.faceStyle);
+      applyStatusOrbStyle(state.telemetry.status);
       face.setMood(mood);
       state.mood = mood;
       return;
     }
     const effect = pick(CLICK_EFFECTS, state.reactionIndex++);
-    const mood = effect === "fire" ? "error" : effect === "earth" || effect === "dyson" ? "delight" : "success";
+    const mood = effect === "fire" ? "error" : effect === "earth" || effect === "dyson" || effect === "rainbow-bands" ? "delight" : "success";
     applyVisual(effect, mood, elapsed, 3.2);
   }
 
@@ -205,6 +235,7 @@ function createOrbScene(host, initialTelemetry) {
     root.position.y = Math.sin(elapsed * 1.15 * speed) * 0.055;
     settle(elapsed);
     effectManager.update(elapsed);
+    if (effectManager.activeId === "neutral") applyStatusOrbStyle(state.telemetry.status);
     face.update(elapsed, look);
     renderer.render(scene, camera);
     if (!reducedMotion) frame = window.requestAnimationFrame(render);

@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
 const childProcess = require("child_process");
+const fs = require("fs");
 
 const { MOCK, freshTmpDir } = require("./helpers/env.js");
 
@@ -71,5 +72,33 @@ test("CLI script with malformed --args reports a clean JSON error", async () => 
 test("CLI unknown-command hint includes script", async () => {
   const { code, stderr } = await runCli(["frobnicate"], {});
   assert.notStrictEqual(code, 0);
-  assert.match(stderr, /plan\|run\|pipeline\|resume\|status\|script/);
+  assert.match(stderr, /plan\|run\|pipeline\|resume\|status\|script\|workflow/);
+});
+
+test("CLI workflow run resolves project .claude/workflows by name", async () => {
+  const home = freshTmpDir("ultracode-workflow-cli-");
+  const dir = path.join(home, ".claude", "workflows");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "echo.js"),
+    [
+      'export const meta = { name: "Echo Workflow", description: "Named workflow" };',
+      'phase("echo");',
+      'const value = await agent(`echo ${args.who}`);',
+      'return { who: args.who, ok: value !== null };'
+    ].join("\n")
+  );
+  const { code, stdout, stderr } = await runCli(
+    ["workflow", "run", "echo", "--args", '{"who":"named"}', "--cwd", home, "--codex-bin", MOCK, "--codex-home", home],
+    { CODEX_HOME: home, CODEX_CLI_PATH: MOCK }
+  );
+  assert.strictEqual(code, 0, `workflow run exited 0 (stderr: ${stderr})`);
+  const record = JSON.parse(stdout);
+  assert.strictEqual(record.kind, "script");
+  assert.strictEqual(record.name, "Echo");
+  assert.strictEqual(record.meta.name, "Echo Workflow");
+  assert.strictEqual(record.result.who, "named");
+  assert.strictEqual(record.meta.description, "Named workflow");
+  assert.ok(record.script_path && fs.existsSync(record.script_path), "script snapshot was written");
+  assert.ok(record.definition_ref && record.definition_ref.id === "echo");
 });

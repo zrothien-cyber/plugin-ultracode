@@ -1,7 +1,9 @@
 import { AlertTriangle, CheckCircle2, CircleSlash, Clock3, Database, FileText, Shield } from "./icons.js";
-import { compactText, formatDate, outputText } from "./state.js";
+import { compactText, formatDate, fullOutputText, fullText, outputText } from "./state.js";
+import { OutputViewer } from "./output-viewer.js";
 
 const React = window.React;
+const { useState } = React;
 const h = React.createElement;
 
 const STATUS_LABELS = {
@@ -81,30 +83,63 @@ function StatusChip({ status }) {
   return h("span", { className: `ledger-chip status-${status || "pending"}` }, STATUS_LABELS[status] || "Pending");
 }
 
-function EventRow({ event, nodes, index, selected, onInspect }) {
+function eventKey(event, index) {
+  return `${event.at || ""}-${event.type || ""}-${event.message || ""}-${index}`;
+}
+
+function EventDetails({ event, worker, status }) {
+  const workerOutput = fullOutputText(worker);
+  const prompt = worker && worker.spec && worker.spec.prompt ? fullText(worker.spec.prompt) : "";
+  const eventOutput = fullText(event);
+  const danger = status === "failed" || Boolean(event && (event.error || (event.data && event.data.error)));
+  return h(
+    "div",
+    { className: "journal-details" },
+    workerOutput
+      ? h(OutputViewer, {
+          title: worker && worker.error ? "Error" : "Output",
+          value: workerOutput,
+          danger: Boolean(worker && worker.error)
+        })
+      : null,
+    eventOutput ? h(OutputViewer, { title: "Full Journal Event", value: eventOutput, danger }) : null,
+    prompt ? h(OutputViewer, { title: "Prompt", value: prompt }) : null
+  );
+}
+
+function EventRow({ event, nodes, index, expanded, onToggle, onSelectWorker }) {
   const worker = workerForEvent(event, nodes);
   const status = statusForEvent(event, worker);
   const code = agentCode(worker, index);
   const message = compactText(event.message || event.label || event.type || "", 120);
   return h(
-    "button",
-    {
-      className: `journal-row status-${status}${selected ? " selected" : ""}`,
-      type: "button",
-      onClick: () => onInspect(worker ? worker.id : null, event)
-    },
-    h("time", null, formatDate(event.at)),
-    h("span", { className: "journal-agent" }, code),
-    h("span", { className: "journal-event" }, event.type || "event"),
-    h("span", { className: "journal-message" }, message),
-    h("span", { className: "journal-output" }, h(OutputIcon, { status }), outputSummary(event, worker, status)),
-    h(StatusChip, { status })
+    "article",
+    { className: `journal-entry status-${status}${expanded ? " selected" : ""}` },
+    h(
+      "button",
+      {
+        className: "journal-row",
+        type: "button",
+        onClick: () => {
+          if (worker && typeof onSelectWorker === "function") onSelectWorker(worker.id);
+          onToggle();
+        },
+        "aria-expanded": expanded
+      },
+      h("time", null, formatDate(event.at)),
+      h("span", { className: "journal-agent" }, code),
+      h("span", { className: "journal-event" }, event.type || "event"),
+      h("span", { className: "journal-message" }, message),
+      h("span", { className: "journal-output" }, h(OutputIcon, { status }), outputSummary(event, worker, status)),
+      h(StatusChip, { status })
+    ),
+    expanded ? h(EventDetails, { event, worker, status }) : null
   );
 }
 
-export function JournalPanel({ graph, selectedEvent, onInspect }) {
+export function JournalPanel({ graph, onSelectWorker }) {
+  const [expandedKey, setExpandedKey] = useState("");
   const events = graph.events.slice(-10).reverse();
-  const selectedKey = selectedEvent ? `${selectedEvent.at || ""}-${selectedEvent.type || ""}-${selectedEvent.message || ""}` : "";
   return h(
     "section",
     { className: "journal-panel", "aria-label": "Workflow journal" },
@@ -130,8 +165,16 @@ export function JournalPanel({ graph, selectedEvent, onInspect }) {
       events.length
         ? events.map((event, index) => {
             const key = `${event.at || ""}-${event.type || ""}-${index}`;
-            const eventKey = `${event.at || ""}-${event.type || ""}-${event.message || ""}`;
-            return h(EventRow, { event, nodes: graph.nodes, index, selected: selectedKey === eventKey, onInspect, key });
+            const rowKey = eventKey(event, index);
+            return h(EventRow, {
+              event,
+              nodes: graph.nodes,
+              index,
+              expanded: expandedKey === rowKey,
+              onToggle: () => setExpandedKey((current) => (current === rowKey ? "" : rowKey)),
+              onSelectWorker,
+              key
+            });
           })
         : h("p", { className: "journal-empty" }, "No journal events recorded yet.")
     )

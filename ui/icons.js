@@ -154,6 +154,12 @@ export function Pause(props) {
   ]);
 }
 
+export function Play(props) {
+  return svg(props, [
+    h("polygon", { key: "a", points: "6 3 20 12 6 21 6 3" })
+  ]);
+}
+
 export function RefreshCcw(props) {
   return svg(props, [
     h("path", { key: "a", d: "M21 12a9 9 0 0 1-15 6.7L3 16" }),
@@ -167,6 +173,24 @@ export function Search(props) {
   return svg(props, [
     h("circle", { key: "a", cx: "11", cy: "11", r: "8" }),
     h("path", { key: "b", d: "m21 21-4.3-4.3" })
+  ]);
+}
+
+export function Trash2(props) {
+  return svg(props, [
+    h("path", { key: "a", d: "M3 6h18" }),
+    h("path", { key: "b", d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }),
+    h("path", { key: "c", d: "M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" }),
+    h("path", { key: "d", d: "M10 11v6" }),
+    h("path", { key: "e", d: "M14 11v6" })
+  ]);
+}
+
+export function Save(props) {
+  return svg(props, [
+    h("path", { key: "a", d: "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" }),
+    h("path", { key: "b", d: "M17 21v-8H7v8" }),
+    h("path", { key: "c", d: "M7 3v5h8" })
   ]);
 }
 

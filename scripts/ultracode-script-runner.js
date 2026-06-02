@@ -28,8 +28,16 @@
 const fs = require("fs/promises");
 const path = require("path");
 
+const {
+  assertClaudeWorkflowSupported,
+  cacheKey,
+  extractClaudeWorkflowMeta,
+  prepareClaudeWorkflowSource,
+  sourceHash
+} = require("./claude-workflow-compat");
 const { transformSource } = require("./script-source-transform");
 const { attachWorkflowUi, shouldLaunchUi } = require("./ultracode-ui-launcher");
+const workflowDefinitions = require("./workflow-definitions");
 
 // Top-level require of the engine is intentional and safe: the engine must
 // NOT top-level require this runner (it uses a lazy require wrapper), so there
@@ -44,6 +52,34 @@ const engine = require("./ultracode-engine");
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function writeText(filePath, value) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, value.endsWith("\n") ? value : `${value}\n`, "utf8");
+}
+
+function scriptSnapshotPathFor(id) {
+  return path.join(path.dirname(engine.stateDir()), "scripts", `${id}.workflow.js`);
+}
+
+async function readResumeRecord(input) {
+  const id = input.resume_from_run_id || input.resumeFromRunId;
+  if (!id) return null;
+  const record = await engine.readWorkflow({ workflow_id: id });
+  if (!record || record.status === "missing") {
+    throw new Error(`resume_from_run_id "${id}" was not found.`);
+  }
+  return record;
+}
+
+function cacheableWorkerMap(record) {
+  const out = new Map();
+  for (const worker of (record && record.workers) || []) {
+    if (!worker || worker.status !== "completed" || !worker.cache_key) continue;
+    out.set(worker.cache_key, worker);
+  }
+  return out;
 }
 
 function makeScriptPersister(record, ctx) {
@@ -76,6 +112,8 @@ function scriptPendingWorkerRecord(meta, fallbackIndex) {
     title: (meta && meta.title) || label,
     label,
     phase: (meta && meta.phase) || null,
+    ...(meta && meta.script_call_id ? { script_call_id: meta.script_call_id } : {}),
+    ...(meta && meta.cache_key ? { cache_key: meta.cache_key } : {}),
     status: "pending",
     ...(meta && meta.spec ? { spec: meta.spec } : {})
   };
@@ -124,6 +162,8 @@ const SCOPE_PARAMS = [
   "log",
   "phase",
   "workflow",
+  "context",
+  "orchestrator",
   "budget",
   "args",
   "ctx",
@@ -137,8 +177,9 @@ const SCOPE_PARAMS = [
 // default phase for worker-spawning primitives.
 // ---------------------------------------------------------------------------
 
-function buildScope(ctx, input) {
+function buildScope(ctx, input, hooks = {}) {
   let currentPhase = null;
+  let scriptCallIndex = 0;
 
   // Defaults shared by every spawn: where the codex bin/home live and the cwd.
   // These come from the runScript input so a script never has to repeat them.
@@ -154,12 +195,37 @@ function buildScope(ctx, input) {
   // spawnWorker(prompt, opts?) -> FULL engine record {status,value,usage,...}.
   // ctx + phase defaults are injected; never throws (engine resolves a failure
   // to a {status:'failed'} record).
+  function normalizeWorkerOpts(opts = {}) {
+    const normalized = { ...(opts || {}) };
+    if (normalized.agentType && !normalized.label) normalized.label = String(normalized.agentType);
+    if (normalized.name && !normalized.label) normalized.label = String(normalized.name);
+    return normalized;
+  }
+
   function spawnWorker(prompt, opts = {}) {
-    return engine.spawnWorker(prompt, {
+    const callId = `call-${scriptCallIndex + 1}`;
+    scriptCallIndex += 1;
+    const normalizedOpts = normalizeWorkerOpts(opts);
+    const callOpts = {
       ...spawnDefaults,
       phase: currentPhase,
-      ...opts,
-      ctx
+      ...normalizedOpts
+    };
+    const key = cacheKey({ kind: "spawnWorker", prompt, opts: callOpts });
+    const cached = typeof hooks.lookupCachedWorker === "function" ? hooks.lookupCachedWorker(key) : null;
+    if (cached && typeof hooks.recordCachedWorker === "function") {
+      return hooks.recordCachedWorker(cached, {
+        callId,
+        cacheKey: key,
+        prompt,
+        opts: callOpts
+      });
+    }
+    return engine.spawnWorker(prompt, {
+      ...callOpts,
+      ctx,
+      script_call_id: callId,
+      cache_key: key
     });
   }
 
@@ -169,6 +235,30 @@ function buildScope(ctx, input) {
     const record = await spawnWorker(prompt, opts);
     return record && record.status === "completed" ? record.value : null;
   }
+
+  agent.create = function createAgent(defaults = {}) {
+    const agentDefaults = normalizeWorkerOpts(defaults);
+    return {
+      run(prompt, opts = {}) {
+        const finalPrompt = prompt || agentDefaults.prompt;
+        if (typeof finalPrompt !== "string" || !finalPrompt.trim()) {
+          throw new Error("agent.create(...).run(prompt) requires a prompt.");
+        }
+        const merged = normalizeWorkerOpts({ ...agentDefaults, ...opts });
+        delete merged.prompt;
+        return agent(finalPrompt, merged);
+      },
+      spawn(prompt, opts = {}) {
+        const finalPrompt = prompt || agentDefaults.prompt;
+        if (typeof finalPrompt !== "string" || !finalPrompt.trim()) {
+          throw new Error("agent.create(...).spawn(prompt) requires a prompt.");
+        }
+        const merged = normalizeWorkerOpts({ ...agentDefaults, ...opts });
+        delete merged.prompt;
+        return spawnWorker(finalPrompt, merged);
+      }
+    };
+  };
 
   // parallel(thunks) -> barrier gather; a throwing thunk degrades to null.
   function parallel(thunks) {
@@ -210,7 +300,7 @@ function buildScope(ctx, input) {
   // ULTRACODE_DEPTH. Refuses (and logs) beyond depth 1 with a clear, explicit
   // throw rather than silently no-op'ing. The nested run inherits concurrency/
   // budget/cap knobs but creates its own ctx at depth+1 (the engine pattern).
-  function workflow(pathOrSource, workflowArgs) {
+  async function workflow(pathOrSource, workflowArgs) {
     const depth = Number(process.env.ULTRACODE_DEPTH || 0);
     if (depth >= 1) {
       engine.log(ctx, "nested script workflow refused: depth limit reached", {
@@ -243,10 +333,51 @@ function buildScope(ctx, input) {
     } else if (typeof pathOrSource === "string" && pathOrSource.includes("\n")) {
       nested.source = pathOrSource;
     } else {
-      nested.path = pathOrSource;
+      const raw = String(pathOrSource || "").trim();
+      const isExplicitPath = /[\\/]/.test(raw) || /\.js$/i.test(raw);
+      if (isExplicitPath) {
+        nested.path = path.isAbsolute(raw) ? raw : path.resolve(input.cwd || process.cwd(), raw);
+      } else {
+        const definition = await workflowDefinitions.resolveWorkflowDefinition(raw, {
+          cwd: input.cwd,
+          codex_home: spawnDefaults.codex_home
+        });
+        nested.path = definition.path;
+        nested.name = definition.name;
+        nested.claude_compat = true;
+        nested.definition_ref = {
+          id: definition.id,
+          name: definition.name,
+          scope: definition.scope,
+          path: definition.path,
+          source_hash: definition.source_hash
+        };
+      }
     }
     return runScript(nested);
   }
+
+  const context = Object.freeze({
+    args: input.args,
+    cwd: input.cwd,
+    workflow,
+    phase,
+    log,
+    budget: ctx.budget
+  });
+
+  const orchestrator = Object.freeze({
+    agent,
+    spawnWorker,
+    parallel,
+    pipeline,
+    loopUntilDry,
+    adversarialVerify,
+    phase,
+    log,
+    workflow,
+    budget: ctx.budget
+  });
 
   return {
     agent,
@@ -258,6 +389,8 @@ function buildScope(ctx, input) {
     log,
     phase,
     workflow,
+    context,
+    orchestrator,
     budget: ctx.budget,
     args: input.args,
     ctx,
@@ -284,10 +417,19 @@ async function runScript(input = {}) {
   const cwd = path.resolve(input.cwd || process.cwd());
   // Read the file by its contents only (dirname-independent): the script body
   // does not depend on where the file lives on disk.
-  const source = hasSource ? input.source : await fs.readFile(path.resolve(input.path), "utf8");
+  const sourcePath = hasSource ? null : path.resolve(cwd, input.path);
+  const source = hasSource ? input.source : await fs.readFile(sourcePath, "utf8");
+  const claudeCompat = Boolean(input.claude_compat || input.claudeCompat);
+  if (claudeCompat) assertClaudeWorkflowSupported(source);
+  const executionSource = claudeCompat ? prepareClaudeWorkflowSource(source) : source;
+  const meta = extractClaudeWorkflowMeta(source);
+  const hash = sourceHash(source);
+  const resumeRecord = await readResumeRecord(input);
+  const resumeCache = cacheableWorkerMap(resumeRecord);
 
-  const identity = engine.workflowIdentity(input, "Script Run");
+  const identity = engine.workflowIdentity({ ...input, name: input.name || (meta && meta.name) }, "Script Run");
   const id = identity.id;
+  const scriptPath = scriptSnapshotPathFor(id);
   let record = null;
   let persister = null;
   let ctx = null;
@@ -359,6 +501,12 @@ async function runScript(input = {}) {
       retry_jitter: input.retry_jitter === undefined ? null : input.retry_jitter
     },
     state_path: statePath,
+    source_path: sourcePath,
+    script_path: scriptPath,
+    source_hash: hash,
+    meta: meta || null,
+    definition_ref: input.definition_ref || input.definitionRef || null,
+    resume_from_run_id: resumeRecord ? resumeRecord.id : null,
     // Script records are not step-resumable, but they do journal the dynamic
     // workers they spawned so status can show live progress and post-run details.
     workers: [],
@@ -369,12 +517,61 @@ async function runScript(input = {}) {
 
   // Persist a "running" snapshot up-front so an interrupted run still leaves a
   // readable record (mirrors runWorkflow).
+  await writeText(scriptPath, source);
   await writeJson(statePath, record);
   persister = makeScriptPersister(record, ctx);
   await attachWorkflowUi(record, ctx, input);
   if (record.ui) schedulePersist();
 
-  const scope = buildScope(ctx, { ...input, cwd });
+  const scope = buildScope(ctx, { ...input, cwd }, {
+    lookupCachedWorker(key) {
+      return resumeCache.get(key) || null;
+    },
+    recordCachedWorker(cached, metaForCache) {
+      const index = record.workers.length;
+      const idForWorker = `worker-${index + 1}`;
+      const cachedRecord = {
+        index,
+        id: idForWorker,
+        step_id: idForWorker,
+        title: cached.title || cached.label || idForWorker,
+        label: cached.label || cached.title || idForWorker,
+        phase: cached.phase || null,
+        status: "completed",
+        result: cached.result,
+        value: cached.value,
+        usage: null,
+        duration_ms: 0,
+        thread_id: cached.thread_id || null,
+        cached: true,
+        cached_from_run_id: resumeRecord.id,
+        script_call_id: metaForCache.callId,
+        cache_key: metaForCache.cacheKey,
+        spec: {
+          ...(cached.spec || {}),
+          prompt: metaForCache.prompt,
+          cache_opts_hash: cacheKey({ opts: metaForCache.opts })
+        }
+      };
+      record.workers.push(cachedRecord);
+      engine.log(ctx, `script cache hit for ${metaForCache.callId}`, {
+        reason: "script-cache-hit",
+        cached_from_run_id: resumeRecord.id
+      });
+      schedulePersist();
+      return Promise.resolve({
+        status: "completed",
+        value: cachedRecord.value,
+        result: cachedRecord.value,
+        usage: null,
+        thread_id: cachedRecord.thread_id,
+        duration_ms: 0,
+        label: cachedRecord.label,
+        phase: cachedRecord.phase,
+        cached: true
+      });
+    }
+  });
 
   // Capture orphan (un-awaited) promise rejections from the script. A
   // fire-and-forget rejection (e.g. `Promise.reject(x)` with no await) fires on
@@ -397,7 +594,7 @@ async function runScript(input = {}) {
   try {
     let fn;
     try {
-      fn = new AsyncFunction(...SCOPE_PARAMS, transformSource(source));
+      fn = new AsyncFunction(...SCOPE_PARAMS, transformSource(executionSource));
     } catch (compileError) {
       // SyntaxError from the AsyncFunction constructor.
       throw compileError;

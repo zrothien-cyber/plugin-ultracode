@@ -5,6 +5,8 @@ const fs = require("fs/promises");
 const http = require("http");
 const path = require("path");
 const { displayRunName } = require("./run-identity");
+const scriptRunner = require("./ultracode-script-runner");
+const workflowDefinitions = require("./workflow-definitions");
 
 const STATIC_DIR = path.join(__dirname, "..", "ui");
 const MIME = new Map([
@@ -89,8 +91,29 @@ async function workflowById(id) {
   }
 }
 
+async function requestJson(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  if (chunks.length === 0) return {};
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw.trim()) return {};
+  return JSON.parse(raw);
+}
+
+async function workflowDefinitionContext(parsed) {
+  const explicitCwd = parsed.searchParams.get("cwd");
+  if (explicitCwd) return { cwd: explicitCwd };
+  const latest = await latestWorkflow();
+  return { cwd: (latest && latest.cwd) || process.cwd() };
+}
+
+function stripDefinitionSource(definition) {
+  const { source, ...summary } = definition;
+  return summary;
+}
+
 function summarize(record, stat) {
-  const workers = Array.isArray(record.workers) ? record.workers : [];
+  const workers = Array.isArray(record.workers) && record.workers.length > 0 ? record.workers : Array.isArray(record.steps) ? record.steps : [];
   const displayName = displayRunName(record);
   return {
     id: record.id,
@@ -181,6 +204,110 @@ async function handle(req, res) {
       return;
     }
     json(res, 200, enrichWorkflow(record));
+    return;
+  }
+  if (pathname === "/api/workflow-definitions") {
+    if (req.method === "GET") {
+      json(res, 200, { workflows: await workflowDefinitions.listWorkflowDefinitions(await workflowDefinitionContext(parsed)) });
+      return;
+    }
+    if (req.method === "POST") {
+      const body = await requestJson(req);
+      let source = body.source;
+      let cwd = body.cwd || null;
+      let name = body.name || null;
+      if (!source && body.workflow_id) {
+        const record = await workflowById(String(body.workflow_id));
+        if (!record) {
+          json(res, 404, { error: "Workflow record not found.", id: body.workflow_id });
+          return;
+        }
+        const scriptPath = record.script_path || record.source_path;
+        if (!scriptPath) {
+          json(res, 400, { error: "Workflow record does not include a script_path or source_path." });
+          return;
+        }
+        source = await fs.readFile(scriptPath, "utf8");
+        cwd = cwd || record.cwd;
+        name = name || (record.meta && record.meta.name) || record.name || record.slug || record.id;
+      }
+      const saved = await workflowDefinitions.saveWorkflowDefinition({
+        name,
+        source,
+        cwd: cwd || (await workflowDefinitionContext(parsed)).cwd,
+        scope: body.scope || "project",
+        codex_home: body.codex_home || null
+      });
+      json(res, 200, { saved: true, workflow: stripDefinitionSource(saved) });
+      return;
+    }
+    json(res, 405, { error: "Method not allowed." });
+    return;
+  }
+  const definitionMatch = /^\/api\/workflow-definitions\/([^/]+)$/.exec(pathname);
+  if (definitionMatch) {
+    const id = decodeURIComponent(definitionMatch[1]);
+    const context = await workflowDefinitionContext(parsed);
+    if (req.method === "GET") {
+      const definition = await workflowDefinitions.resolveWorkflowDefinition(id, context);
+      json(res, 200, definition);
+      return;
+    }
+    if (req.method === "PUT" || req.method === "PATCH") {
+      const body = await requestJson(req);
+      const updated = await workflowDefinitions.updateWorkflowDefinition(id, {
+        ...context,
+        source: body.source
+      });
+      json(res, 200, { saved: true, workflow: stripDefinitionSource(updated) });
+      return;
+    }
+    if (req.method === "DELETE") {
+      const deleted = await workflowDefinitions.deleteWorkflowDefinition(id, context);
+      json(res, 200, { deleted: true, workflow: deleted });
+      return;
+    }
+    json(res, 405, { error: "Method not allowed." });
+    return;
+  }
+  const definitionRunMatch = /^\/api\/workflow-definitions\/([^/]+)\/run$/.exec(pathname);
+  if (definitionRunMatch) {
+    if (req.method !== "POST") {
+      json(res, 405, { error: "Method not allowed." });
+      return;
+    }
+    const id = decodeURIComponent(definitionRunMatch[1]);
+    const body = await requestJson(req);
+    const context = await workflowDefinitionContext(parsed);
+    const definition = await workflowDefinitions.resolveWorkflowDefinition(id, context);
+    const record = await scriptRunner.runScript({
+      path: definition.path,
+      name: definition.name,
+      args: body.args,
+      cwd: body.cwd || context.cwd,
+      codex_bin: body.codex_bin,
+      codex_home: body.codex_home,
+      concurrency: body.concurrency,
+      budget_tokens: body.budget_tokens,
+      max_agents: body.max_agents,
+      launch_stagger_ms: body.launch_stagger_ms,
+      claude_compat: true,
+      ui: false,
+      definition_ref: {
+        id: definition.id,
+        name: definition.name,
+        scope: definition.scope,
+        path: definition.path,
+        source_hash: definition.source_hash
+      }
+    });
+    json(res, 200, {
+      started: true,
+      workflow_id: record.id,
+      status: record.status,
+      url: `${serverUrl}/workflow/${encodeURIComponent(record.id)}`,
+      record: enrichWorkflow(record)
+    });
     return;
   }
   const workflowMatch = /^\/api\/workflows\/([^/]+)$/.exec(pathname);

@@ -18,6 +18,59 @@ export async function fetchJson(pathname) {
   return response.json();
 }
 
+export async function postJson(pathname, body) {
+  const response = await fetch(pathname, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const payload = await response.json();
+      if (payload && payload.error) message = payload.error;
+    } catch {
+      /* keep the HTTP status */
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function putJson(pathname, body) {
+  const response = await fetch(pathname, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const payload = await response.json();
+      if (payload && payload.error) message = payload.error;
+    } catch {
+      /* keep the HTTP status */
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function deleteJson(pathname) {
+  const response = await fetch(pathname, { method: "DELETE" });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const payload = await response.json();
+      if (payload && payload.error) message = payload.error;
+    } catch {
+      /* keep the HTTP status */
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
 export function compactText(value, limit = 280) {
   if (value === undefined || value === null) return "";
   let text;

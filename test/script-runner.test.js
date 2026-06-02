@@ -5,7 +5,7 @@ const assert = require("node:assert");
 const path = require("path");
 const fs = require("fs");
 
-const { engine, MOCK, MOCK_FAIL, freshTmpDir } = require("./helpers/env.js");
+const { engine, MOCK, MOCK_FAIL, freshTmpDir, withCodexHome } = require("./helpers/env.js");
 const { runScript, transformSource } = require("../scripts/ultracode-script-runner.js");
 
 const ECHO_FIXTURE = path.join(__dirname, "fixtures", "echo.workflow.js");
@@ -96,6 +96,24 @@ test("runScript: a throwing script journals status:failed with the message and p
   assert.strictEqual(rec.status, "failed");
   assert.match(rec.error, /kaboom/);
   assert.ok(Array.isArray(rec.events) && rec.events.length >= 1, "partial events written");
+});
+
+test("runScript: resume_from_run_id reuses matching completed agent calls", async () => {
+  await withCodexHome(async (home) => {
+    const opts = { codex_bin: MOCK, codex_home: home, cwd: home };
+    const source = "const v = await agent('inspect cached'); return { ok: !!v };";
+    const first = await runScript({ source, ...opts });
+    assert.strictEqual(first.status, "completed");
+    assert.strictEqual(first.workers.length, 1);
+    assert.ok(first.workers[0].cache_key, "first run recorded cache key");
+
+    const second = await runScript({ source, resume_from_run_id: first.id, ...opts });
+    assert.strictEqual(second.status, "completed");
+    assert.strictEqual(second.workers.length, 1);
+    assert.strictEqual(second.workers[0].cached, true);
+    assert.strictEqual(second.workers[0].cached_from_run_id, first.id);
+    assert.strictEqual(second.aggregate_usage.total_tokens, 0, "cache hit did not spend worker tokens");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -455,6 +473,41 @@ test("workflow(): nested source can export default while the outer workflow also
   });
   assert.strictEqual(rec.status, "completed");
   assert.deepStrictEqual(rec.result, { ok: true, child: { inner: true } });
+});
+
+test("workflow(): nested saved definition resolves by Claude command name", async () => {
+  const opts = baseOpts();
+  const workflowDir = path.join(opts.cwd, ".claude", "workflows");
+  fs.mkdirSync(workflowDir, { recursive: true });
+  fs.writeFileSync(path.join(workflowDir, "child.js"), 'export const meta = { name: "Child" }; return { child: args.name };\n');
+  const rec = await runScript({
+    source: 'const child = await workflow("child", { name: "ada" }); return { nested: child.result, ref: child.definition_ref.id };',
+    ...opts
+  });
+  assert.strictEqual(rec.status, "completed");
+  assert.deepStrictEqual(rec.result, { nested: { child: "ada" }, ref: "child" });
+});
+
+test("Claude compat: exported run(context) and orchestrator aliases execute", async () => {
+  const rec = await runScript({
+    source: [
+      'import { orchestrator } from "claude/workflows";',
+      'export const meta = { name: "Run Context", phases: [{ title: "One", detail: "Mapped" }] };',
+      "export async function run(context) {",
+      '  orchestrator.phase("One");',
+      '  const value = await orchestrator.agent("hello", { agentType: "reader" });',
+      "  return { args: context.args, ok: !!value };",
+      "}"
+    ].join("\n"),
+    args: { target: "unit" },
+    claude_compat: true,
+    ...baseOpts()
+  });
+  assert.strictEqual(rec.status, "completed");
+  assert.deepStrictEqual(rec.meta.phases, [{ title: "One", detail: "Mapped" }]);
+  assert.deepStrictEqual(rec.result.args, { target: "unit" });
+  assert.strictEqual(rec.result.ok, true);
+  assert.strictEqual(rec.workers[0].label, "reader");
 });
 
 test("workflow() refuses beyond depth 1 with a clear error and logs", async () => {

@@ -20,6 +20,7 @@ engine options map to kebab-case flags (`--budget-tokens`, `--max-retries`, `--r
 - `status`: inspect persisted workflow state (journaled, so it reflects mid-flight progress). A deliberately
   cancelled run (first Ctrl-C) is recorded with status `cancelled`, distinct from `failed`/`partial`/`completed`.
 - `script`: run an imperative Workflow script (the Codex analogue of Claude Code's in-process Workflow tool).
+- `workflow`: list, show, run, or save Claude-style saved workflow definitions from `.claude/workflows`.
 
 `run`, `pipeline`, `resume`, and `script` launch the local React dashboard by default. The dashboard URL is
 stored on `record.ui.url` and emitted as a `ui.ready` event. Disable it with `--no-ui` or `ULTRACODE_UI=0`.
@@ -165,6 +166,8 @@ Bound scope (ctx is auto-injected — never pass it):
 - `loopUntilDry(makePrompt, opts?)`, `adversarialVerify(findings, opts?)` → as above; both inherit the current
   `phase()` by default inside scripts.
 - `log(message, data?)`, `phase(title)`, `workflow(pathOrSource, args?)` (one-level nested run).
+- `context` (`{ args, cwd, workflow, phase, log, budget }`) and `orchestrator` (namespace alias for the
+  primitives) for Claude-compatible saved workflows.
 - `budget` (`{ total, spent(), remaining() }`), `args`, `ctx`, `WORKER_SCHEMA`, `VERDICT_SCHEMA`.
 
 Top-level `await` and a top-level `return` (or top-level `export default <expr>`) become `record.result`.
@@ -172,6 +175,44 @@ The journaled `kind: "script"` record is readable by `status`, updates while the
 the dynamic worker records spawned by `agent`, `spawnWorker`, `loopUntilDry`, and `adversarialVerify`. See
 `examples/parallel-reduce.workflow.js` and
 `examples/budget-loop.workflow.js`, and `cookbook.md` for the composed patterns.
+
+Script records also include a source snapshot:
+
+- `script_path`: the saved source copy under `$CODEX_HOME/ultracode/scripts/`.
+- `source_path`: the original path when run from a file.
+- `source_hash`: SHA-256 of the script source.
+- `meta`: parsed Claude-style `export const meta = { name, description, phases }` when present.
+- `definition_ref`: saved-workflow identity when run through `workflow run`.
+
+`resume_from_run_id` / `resumeFromRunId` enables explicit cached-call reuse for scripts. Completed prior
+`agent()` / `spawnWorker()` calls are reused only when the deterministic prompt+options cache key matches; changed
+calls spawn live workers. This is narrower than full arbitrary-JS step resume.
+
+## Saved workflow definitions (`workflow`)
+
+Saved definitions are JavaScript workflows discovered in this order:
+
+- `<cwd>/.claude/workflows/*.js`
+- `~/.claude/workflows/*.js`
+- `$CODEX_HOME/ultracode/workflows/*.js`
+
+Project definitions win when names collide.
+
+```bash
+node scripts/ultracode-cli.js workflow list
+node scripts/ultracode-cli.js workflow show deep-research
+node scripts/ultracode-cli.js workflow run deep-research --args '{"topic":"Codex"}'
+node scripts/ultracode-cli.js workflow save deep-research --workflow-id ultra-...
+node scripts/ultracode-cli.js workflow save deep-research --source 'export const meta = { name: "Deep Research" }; return {};'
+node scripts/ultracode-cli.js workflow update deep-research --source-path .claude/workflows/deep-research.js
+node scripts/ultracode-cli.js workflow delete deep-research
+```
+
+`workflow run` turns on strict Claude-compat diagnostics and adapters before execution. Allowed workflow
+primitive imports are rewritten to the bound runtime, `export async function run(context)` is invoked
+automatically, and direct workflow-side filesystem/shell/host access fails explicitly before workers spawn.
+The dashboard server also exposes definition list/show/save/update/delete/run endpoints, and the React UI shows
+the workflow library with source editing and JSON-args run support.
 
 ## Warm-context executor & transport (opt-in)
 

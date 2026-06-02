@@ -1,9 +1,9 @@
-import { Activity, AlertTriangle, CheckCircle2, CircleSlash, Clock3, Hourglass, Pause, RefreshCcw } from "./icons.js";
-import { InspectorPanel } from "./inspector-panel.js";
+import { Activity, AlertTriangle, CheckCircle2, CircleSlash, Clock3, Hourglass, Pause, RefreshCcw, Save } from "./icons.js";
 import { JournalPanel } from "./journal-panel.js";
 import { WorkflowGraph } from "./graph.js";
+import { WorkflowLibrary } from "./workflow-library.js";
 import { RunSwitcher } from "./run-switcher.js";
-import { fetchJson, formatDuration, normalizeWorkflow, totalTokens, workflowIdFromLocation } from "./state.js";
+import { fetchJson, formatDuration, normalizeWorkflow, postJson, totalTokens, workflowIdFromLocation } from "./state.js";
 
 const React = window.React;
 const { useEffect, useMemo, useState } = React;
@@ -34,22 +34,33 @@ function Stat({ label, value, status, icon }) {
   const Icon = icon;
   return h(
     "div",
-    { className: `stat status-${status || "neutral"}` },
+    { className: `stat status-${status || "neutral"}`, "data-stat": status || "neutral" },
     h("span", { className: "stat-icon" }, Icon ? h(Icon, { size: 28, strokeWidth: 2 }) : null),
     h("strong", null, value),
     h("span", { className: "stat-label" }, label)
   );
 }
 
-function TopBar({ record, graph, onRefresh, refreshing, error }) {
+function StatsStrip({ record, graph }) {
   const duration =
     record && record.started_at
       ? record.duration_ms || (record.completed_at ? Date.parse(record.completed_at) - Date.parse(record.started_at) : Date.now() - Date.parse(record.started_at))
       : null;
+  return h(
+    "div",
+    { className: "stats-strip" },
+    SUMMARY_ITEMS.map((item) => h(Stat, { key: item.key, label: item.label, value: graph.counts[item.key] || 0, status: item.key, icon: item.icon })),
+    h(Stat, { label: "Elapsed", value: formatDuration(duration) || "0s", status: "elapsed", icon: Hourglass }),
+    h(Stat, { label: "Tokens", value: totalTokens(record).toLocaleString(), status: "tokens", icon: Activity })
+  );
+}
+
+function TopBar({ record, graph, onRefresh, onSaveWorkflow, refreshing, savingWorkflow, error }) {
   const title = record && (record.name || record.display_name || record.task) ? record.name || record.display_name || record.task : record && record.id ? record.id : "Workflow Monitor";
   const id = record && record.id ? record.id : "latest";
   const cwd = record && record.cwd ? record.cwd : "workspace";
   const canPause = Boolean(record && (record.status === "running" || graph.counts.running > 0));
+  const canSave = Boolean(record && record.kind === "script" && record.script_path);
 
   return h(
     "header",
@@ -72,18 +83,25 @@ function TopBar({ record, graph, onRefresh, refreshing, error }) {
             "Pause workflow"
           )
         : null,
+      canSave
+        ? h(
+            "button",
+            {
+              className: "icon-button",
+              type: "button",
+              onClick: onSaveWorkflow,
+              title: "Save workflow definition",
+              "aria-label": "Save workflow definition",
+              disabled: savingWorkflow
+            },
+            h(Save, { size: 18 })
+          )
+        : null,
       h(
         "button",
         { className: "icon-button", type: "button", onClick: onRefresh, title: "Refresh workflow status", "aria-label": "Refresh workflow status", disabled: refreshing },
         h(RefreshCcw, { size: 18, className: refreshing ? "spin" : "" })
       )
-    ),
-    h(
-      "div",
-      { className: "stats-strip" },
-      SUMMARY_ITEMS.map((item) => h(Stat, { key: item.key, label: item.label, value: graph.counts[item.key] || 0, status: item.key, icon: item.icon })),
-      h(Stat, { label: "Elapsed", value: formatDuration(duration) || "0s", status: "elapsed", icon: Hourglass }),
-      h(Stat, { label: "Tokens", value: totalTokens(record).toLocaleString(), status: "tokens", icon: Activity })
     )
   );
 }
@@ -94,8 +112,8 @@ function App() {
   const [runs, setRuns] = useState([]);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [savingWorkflow, setSavingWorkflow] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
-  const [selectedEvent, setSelectedEvent] = useState(null);
   const graph = useMemo(() => normalizeWorkflow(record || {}), [record]);
   const selected = graph.nodes.find((node) => node.id === selectedId) || graph.nodes[0] || null;
 
@@ -132,40 +150,46 @@ function App() {
 
   function selectRun(id) {
     setSelectedId(null);
-    setSelectedEvent(null);
     setWorkflowId(id);
     window.history.replaceState(null, "", `/workflow/${id}`);
   }
 
-  function revealInspector() {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        document.querySelector(".inspector-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-    });
-  }
-
   function inspectAgent(id) {
     setSelectedId(id);
-    setSelectedEvent(null);
-    revealInspector();
   }
 
-  function inspectJournal(workerId, event) {
-    if (workerId) setSelectedId(workerId);
-    setSelectedEvent(event || null);
-    revealInspector();
+  async function saveWorkflowDefinition() {
+    if (!record || !record.id) return;
+    const defaultName = (record.meta && record.meta.name) || record.name || record.slug || record.id;
+    const name = window.prompt("Workflow name", defaultName);
+    if (!name || !name.trim()) return;
+    setSavingWorkflow(true);
+    try {
+      await postJson("/api/workflow-definitions", { workflow_id: record.id, name: name.trim(), scope: "project" });
+      setError("");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
+    } finally {
+      setSavingWorkflow(false);
+    }
+  }
+
+  function runStarted(id) {
+    if (!id) return;
+    selectRun(id);
+    load(id);
   }
 
   return h(
     "main",
     { className: "app-shell" },
+    h(WorkflowLibrary, { record, onRunStarted: runStarted, onError: setError }),
     h(RunSwitcher, { runs, activeId: record && record.id, onSelect: selectRun }),
-    h(TopBar, { record, graph, onRefresh: () => load(workflowId), refreshing, error }),
+    h(TopBar, { record, graph, onRefresh: () => load(workflowId), onSaveWorkflow: saveWorkflowDefinition, refreshing, savingWorkflow, error }),
     error ? h("div", { className: "error-banner" }, h(AlertTriangle, { size: 18 }), h("span", null, error)) : null,
+    h(StatsStrip, { record, graph }),
     h(WorkflowGraph, { record: record || {}, graph, selectedId: selected && selected.id, onSelect: inspectAgent }),
-    h(InspectorPanel, { selected, selectedEvent }),
-    h(JournalPanel, { graph, selectedEvent, onInspect: inspectJournal }),
+    h(JournalPanel, { graph, onSelectWorker: inspectAgent }),
     h(
       "footer",
       { className: "app-footer" },

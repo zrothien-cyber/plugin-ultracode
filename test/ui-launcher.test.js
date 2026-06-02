@@ -8,6 +8,7 @@ const path = require("path");
 
 const { engine, MOCK, freshTmpDir, withCodexHome } = require("./helpers/env.js");
 const { metadataPathForRunsDir, shouldLaunchUi } = require("../scripts/ultracode-ui-launcher.js");
+const { runScript } = require("../scripts/ultracode-script-runner.js");
 
 const CLI = path.join(__dirname, "..", "scripts", "ultracode-cli.js");
 
@@ -15,6 +16,35 @@ async function fetchJson(url) {
   const response = await fetch(url);
   assert.strictEqual(response.status, 200, `GET ${url} returned ${response.status}`);
   return response.json();
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+  const text = await response.text();
+  assert.strictEqual(response.status, 200, `POST ${url} returned ${response.status}: ${text}`);
+  return JSON.parse(text);
+}
+
+async function putJson(url, body) {
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+  const text = await response.text();
+  assert.strictEqual(response.status, 200, `PUT ${url} returned ${response.status}: ${text}`);
+  return JSON.parse(text);
+}
+
+async function deleteJson(url) {
+  const response = await fetch(url, { method: "DELETE" });
+  const text = await response.text();
+  assert.strictEqual(response.status, 200, `DELETE ${url} returned ${response.status}: ${text}`);
+  return JSON.parse(text);
 }
 
 async function stopServer(pid) {
@@ -48,6 +78,12 @@ test("runWorkflow ui:true launches the dashboard server and serves the workflow 
   let serverPid = null;
   await withCodexHome(async (home) => {
     try {
+      const workflowDir = path.join(home, ".claude", "workflows");
+      fs.mkdirSync(workflowDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(workflowDir, "ui-audit.js"),
+        'export const meta = { name: "UI Audit", description: "server list smoke" }; return { ok: true };\n'
+      );
       const events = [];
       const record = await engine.runWorkflow({
         workers_spec: [{ label: "ui-smoke", prompt: "return a tiny UI smoke result", schema: null }],
@@ -76,6 +112,9 @@ test("runWorkflow ui:true launches the dashboard server and serves the workflow 
       assert.strictEqual(apiRecord.id, record.id);
       assert.strictEqual(apiRecord.workers.length, 1);
       assert.strictEqual(apiRecord.ui.url, record.ui.url);
+
+      const definitions = await fetchJson(`${record.ui.server_url}/api/workflow-definitions`);
+      assert.ok(definitions.workflows.some((workflow) => workflow.id === "ui-audit" && workflow.scope === "project"));
 
       const htmlResponse = await fetch(record.ui.url);
       assert.strictEqual(htmlResponse.status, 200);
@@ -128,4 +167,79 @@ test("CLI run launches the dashboard by default and --no-ui disables it", async 
     await stopServer(serverPid);
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("dashboard API saves a script run as a project workflow definition", async () => {
+  let serverPid = null;
+  await withCodexHome(async (home) => {
+    try {
+      const record = await runScript({
+        source: 'export const meta = { name: "Script Save" }; const v = await agent("save me"); return { ok: !!v };',
+        cwd: home,
+        codex_bin: MOCK,
+        codex_home: home,
+        ui: true
+      });
+      serverPid = record.ui && record.ui.server_pid;
+      assert.strictEqual(record.status, "completed");
+
+      const saved = await postJson(`${record.ui.server_url}/api/workflow-definitions`, {
+        workflow_id: record.id,
+        name: "Saved From UI",
+        scope: "project"
+      });
+      assert.strictEqual(saved.saved, true);
+      assert.strictEqual(saved.workflow.id, "saved-from-ui");
+      assert.ok(fs.existsSync(path.join(home, ".claude", "workflows", "saved-from-ui.js")));
+    } finally {
+      await stopServer(serverPid);
+    }
+  });
+});
+
+test("dashboard API updates, runs, and deletes saved workflow definitions", async () => {
+  let serverPid = null;
+  await withCodexHome(async (home) => {
+    try {
+      const record = await runScript({
+        source: 'export const meta = { name: "Library Host" }; return { ok: true };',
+        cwd: home,
+        codex_bin: MOCK,
+        codex_home: home,
+        ui: true
+      });
+      serverPid = record.ui && record.ui.server_pid;
+      const workflowDir = path.join(home, ".claude", "workflows");
+      fs.mkdirSync(workflowDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(workflowDir, "library-run.js"),
+        [
+          'export const meta = { name: "Library Run", phases: [{ title: "Run", detail: "Smoke" }] };',
+          'phase("Run");',
+          'const value = await agent("library smoke");',
+          'return { arg: args && args.value, ok: !!value };'
+        ].join("\n")
+      );
+
+      const updated = await putJson(`${record.ui.server_url}/api/workflow-definitions/library-run`, {
+        source: 'export const meta = { name: "Library Run", description: "updated" }; return { updated: args.value };\n'
+      });
+      assert.strictEqual(updated.workflow.description, "updated");
+
+      const launched = await postJson(`${record.ui.server_url}/api/workflow-definitions/library-run/run`, {
+        args: { value: 42 },
+        codex_bin: MOCK,
+        codex_home: home
+      });
+      assert.strictEqual(launched.started, true);
+      assert.strictEqual(launched.status, "completed");
+      assert.deepStrictEqual(launched.record.result, { updated: 42 });
+
+      const deleted = await deleteJson(`${record.ui.server_url}/api/workflow-definitions/library-run`);
+      assert.strictEqual(deleted.deleted, true);
+      assert.strictEqual(fs.existsSync(path.join(workflowDir, "library-run.js")), false);
+    } finally {
+      await stopServer(serverPid);
+    }
+  });
 });

@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 
 const { engine } = require("./helpers/env.js");
-const { createLimiter } = engine;
+const { createContext, createLimiter } = engine;
 
 function defer(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -71,4 +71,10 @@ test("a rejecting thunk still drains the queue", async () => {
   const bResult = await b;
   assert.strictEqual(bResult, "b-done");
   assert.deepStrictEqual(order, ["a", "b"], "b must run after a rejected");
+});
+
+test("createContext clamps explicit workflow concurrency to Claude's agent cap", () => {
+  const ctx = createContext({ concurrency: 999 });
+  assert.strictEqual(ctx.concurrency, 16);
+  assert.strictEqual(ctx.limiter.max, 16);
 });

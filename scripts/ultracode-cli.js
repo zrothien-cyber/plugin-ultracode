@@ -2,10 +2,12 @@
 "use strict";
 
 const engine = require("./ultracode-engine");
+const fs = require("fs/promises");
 // Require the runner DIRECTLY (not via engine) to keep the script contract
 // clean and cycle-free (the runner requires the engine; the engine never
 // top-level-requires the runner).
 const scriptRunner = require("./ultracode-script-runner");
+const workflowDefinitions = require("./workflow-definitions");
 
 const NUMERIC_KEYS = new Set([
   "workers",
@@ -21,7 +23,7 @@ const NUMERIC_KEYS = new Set([
 ]);
 const JSON_KEYS = new Set(["workers_spec", "force_steps", "steps", "args"]);
 const BOOLEAN_KEYS = new Set(["ui", "retry_jitter", "transport_strict"]);
-const UI_COMMANDS = new Set(["run", "pipeline", "resume", "script"]);
+const UI_COMMANDS = new Set(["run", "pipeline", "resume", "script", "workflow"]);
 
 function parseBool(value) {
   if (value === undefined || value === null) return undefined;
@@ -42,12 +44,16 @@ function parseArgs(argv) {
   // byte-identical; the `script` command maps it to a script `path`.
   if (rest.length > 0 && !rest[0].startsWith("--")) {
     options._positional = rest[0];
+    options._positionals = [rest[0]];
     index = 1;
   }
   for (; index < rest.length; index += 1) {
     const arg = rest[index];
     if (!arg.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${arg}`);
+      if (!options._positionals) options._positionals = [];
+      options._positionals.push(arg);
+      if (options._positional === undefined) options._positional = arg;
+      continue;
     }
     const key = arg.slice(2).replace(/-/g, "_");
     const value = rest[index + 1];
@@ -129,9 +135,104 @@ async function runCancellable(fn, options) {
   }
 }
 
+async function workflowCommand(options) {
+  const positionals = Array.isArray(options._positionals) ? options._positionals : [];
+  const action = positionals[0] || "list";
+  const target = positionals[1] || options.name || options.workflow;
+  const common = {
+    cwd: options.cwd,
+    codex_home: options.codex_home
+  };
+  if (action === "list") {
+    return { kind: "workflow_definitions", workflows: await workflowDefinitions.listWorkflowDefinitions(common) };
+  }
+  if (action === "show") {
+    const definition = await workflowDefinitions.resolveWorkflowDefinition(target, common);
+    return {
+      kind: "workflow_definition",
+      ...definition
+    };
+  }
+  if (action === "run") {
+    const definition = await workflowDefinitions.resolveWorkflowDefinition(target, common);
+    const runOptions = {
+      ...options,
+      path: definition.path,
+      name: options.run_name || options.name || definition.name,
+      claude_compat: true,
+      definition_ref: {
+        id: definition.id,
+        name: definition.name,
+        scope: definition.scope,
+        path: definition.path,
+        source_hash: definition.source_hash
+      }
+    };
+    delete runOptions._positional;
+    delete runOptions._positionals;
+    delete runOptions.workflow;
+    return runCancellable(scriptRunner.runScript, runOptions);
+  }
+  if (action === "save") {
+    let source = options.source;
+    if (!source && options.source_path) source = await fs.readFile(options.source_path, "utf8");
+    if (!source && (options.workflow_id || options.state_path || options.from_workflow_id)) {
+      const record = await engine.readWorkflow({
+        workflow_id: options.from_workflow_id || options.workflow_id,
+        state_path: options.state_path
+      });
+      if (!record || record.status === "missing") throw new Error("No workflow record found to save.");
+      const scriptPath = record.script_path || record.source_path;
+      if (!scriptPath) throw new Error("Workflow record does not include a script_path or source_path.");
+      source = await fs.readFile(scriptPath, "utf8");
+    }
+    const saved = await workflowDefinitions.saveWorkflowDefinition({
+      name: target,
+      source,
+      cwd: options.cwd,
+      codex_home: options.codex_home,
+      scope: options.scope || "project"
+    });
+    return {
+      kind: "workflow_definition",
+      saved: true,
+      ...saved
+    };
+  }
+  if (action === "update") {
+    let source = options.source;
+    if (!source && options.source_path) source = await fs.readFile(options.source_path, "utf8");
+    const updated = await workflowDefinitions.updateWorkflowDefinition(target, {
+      ...common,
+      source
+    });
+    return {
+      kind: "workflow_definition",
+      saved: true,
+      ...updated
+    };
+  }
+  if (action === "delete" || action === "rm") {
+    const deleted = await workflowDefinitions.deleteWorkflowDefinition(target, common);
+    return {
+      kind: "workflow_definition",
+      deleted: true,
+      ...deleted
+    };
+  }
+  throw new Error(`Unknown workflow command: ${action} (expected list|show|run|save|update|delete)`);
+}
+
 async function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
   coerce(options, command);
+  const positionals = Array.isArray(options._positionals) ? options._positionals : [];
+  if (command !== "workflow" && command !== "script" && positionals.length > 0) {
+    throw new Error(`Unexpected argument: ${positionals[0]}`);
+  }
+  if (command === "script" && positionals.length > 1) {
+    throw new Error(`Unexpected argument: ${positionals[1]}`);
+  }
   let result;
   if (command === "plan") {
     result = engine.planWorkflow(options);
@@ -149,9 +250,12 @@ async function main() {
       options.path = options._positional;
     }
     delete options._positional;
+    delete options._positionals;
     result = await runCancellable(scriptRunner.runScript, options);
+  } else if (command === "workflow") {
+    result = await workflowCommand(options);
   } else {
-    throw new Error(`Unknown command: ${command} (expected plan|run|pipeline|resume|status|script)`);
+    throw new Error(`Unknown command: ${command} (expected plan|run|pipeline|resume|status|script|workflow)`);
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
