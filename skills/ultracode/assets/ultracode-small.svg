@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title>Ultracode</title>
+  <defs>
+    <filter id="blue-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="1.6" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.08 0 0 0 0 0.48 0 0 0 0 1 0 0 0 0.9 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="12" fill="#02040a"/>
+  <rect x="4" y="4" width="56" height="56" rx="10" fill="none" stroke="#38bdf8" stroke-width="2.5" filter="url(#blue-glow)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="5.5" stroke-linecap="square" stroke-linejoin="miter" filter="url(#blue-glow)">
+    <path d="M11 22 23 32 11 42"/>
+    <path d="M53 22 41 32 53 42"/>
+  </g>
+  <rect x="27" y="43" width="10" height="4.5" rx="0.5" fill="#ffffff" filter="url(#blue-glow)"/>
+</svg>
