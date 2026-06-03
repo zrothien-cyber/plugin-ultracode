@@ -4,38 +4,81 @@ Lookup material — flags, step fields, primitive signatures. The *decision* gui
 Ultracode, which surface, which pattern) lives in `../SKILL.md`; runnable end-to-end examples live in
 `cookbook.md`. Read this when you already know what you're building and need the exact flag or field.
 
-Run commands as `node scripts/ultracode-cli.js <command> [--flags]` from the plugin checkout, or use the
-absolute `scripts/ultracode-cli.js` path inside the installed plugin cache. Add `--progress` to stream events
-to stderr. `--workers-spec`, `--steps`, `--force-steps`, and `--args` take JSON; numeric flags are coerced;
-engine options map to kebab-case flags (`--budget-tokens`, `--max-retries`, `--reasoning-effort`,
-`--transport`, `--executor`, …).
+Run as `node scripts/ultracode-cli.js <input> [--flags]` from the plugin checkout, or use the absolute
+`scripts/ultracode-cli.js` path inside the installed plugin cache. There is **one** execution command with **no
+leading verb** — the input selects what runs (below). The lifecycle/library verbs (`resume`, `status`,
+`workflow`) still take a leading verb. Add `--progress` to stream events to stderr.
+`--workers-spec`, `--steps`, `--force-steps`, and `--args` take JSON; numeric flags are coerced; engine options
+map to kebab-case flags (`--budget-tokens`, `--max-retries`, `--reasoning-effort`, `--transport`, `--executor`, …).
 
 ## Commands
 
-- `plan`: produce the worker plan without running subprocesses (the dry-run of `run`).
-- `run`: fan out Codex subprocess workers in parallel and return structured findings (one terminal barrier).
-- `pipeline`: run a declarative `steps[]` DAG of Codex stages — barrier-free scheduling.
+### The one execution command
+
+`node scripts/ultracode-cli.js <input> [flags]` runs with no leading verb. Explicit flags win; otherwise the
+leading positional is classified by these strict, ordered rules:
+
+| Input | What runs |
+| --- | --- |
+| `--source <js>` / `--path <file>` / positional `*.js` (or any path with a separator) / a **multi-line** positional | imperative **script** (`runScript`; `kind: "script"` record) |
+| `--steps <json>` / positional `*.json` / inline JSON array whose objects carry `id` | barrier-free **DAG** (`runPipelineSpec`; `record.options.pipeline = true`) |
+| `--workers-spec <json>` / inline JSON array of `{prompt}` objects **without** `id` | arbitrary one-shot **panel** (`runWorkflow` → `runExplicitWorkflow`; `record.options.explicit = true`) |
+| `--task <t>` / a bare **single-line** positional sentence (with `--workers N`, 1-8) | fixed-role **fan-out** (`runWorkflow`; built-in `WORKER_ROLES`) |
+| `--workflow <name>` / positional `@name` | run a **saved** `.claude/workflows` definition (`runScript` + `claude_compat` + `definition_ref`; `kind: "script"` record) |
+
+The inputs are detailed in the input sections below. An empty invocation (no input) errors with a usage hint.
+
+### Lifecycle & library verbs
+
 - `resume`: resume a persisted workflow — completed steps are reused from the journal; only missing/failed/
   forced steps re-run.
 - `status`: inspect persisted workflow state (journaled, so it reflects mid-flight progress). A deliberately
   cancelled run (first Ctrl-C) is recorded with status `cancelled`, distinct from `failed`/`partial`/`completed`.
-- `script`: run an imperative Workflow script (the Codex analogue of Claude Code's in-process Workflow tool).
-- `workflow`: list, show, run, or save Claude-style saved workflow definitions from `.claude/workflows`.
+- `workflow list|show|save|update|delete <name>`: manage Claude-style saved workflow definitions from
+  `.claude/workflows`. Run a saved definition via the one command's `@name` / `--workflow <name>` input.
 
-`run`, `pipeline`, `resume`, and `script` launch the local React dashboard by default. The dashboard URL is
-stored on `record.ui.url` and emitted as a `ui.ready` event. Disable it with `--no-ui` or `ULTRACODE_UI=0`.
-Optional UI flags: `--ui true|false`, `--ui-host <host>`, and `--ui-port <port>` (default host `127.0.0.1`,
-port `0`). The dashboard serves checked-in assets from the plugin cache and reads the same journal files as
-`status`; it does not require `npm install`.
+The unified execution command and `resume` launch the local React dashboard by default (the CLI's
+`UI_COMMANDS` is `exec`/`resume`/`workflow`). The dashboard URL is stored on `record.ui.url` and emitted
+as a `ui.ready` event. Disable it with `--no-ui` or `ULTRACODE_UI=0`. Optional UI flags: `--ui true|false`,
+`--ui-host <host>`, and `--ui-port <port>` (default host `127.0.0.1`, port `0`). The dashboard serves checked-in
+assets from the plugin cache and reads the same journal files as `status`; it does not require `npm install`.
 
-## `run` arguments
+### Canonical invocations
 
-Default fixed-role fan-out:
+```bash
+node scripts/ultracode-cli.js "review the auth refactor" --workers 5 --progress
+node scripts/ultracode-cli.js --steps '[{"id":"a","prompt":"..."}]' --progress
+node scripts/ultracode-cli.js --workers-spec '[{"prompt":"...","label":"sec"}]'
+node scripts/ultracode-cli.js --source 'const out = await dag([...]); return out.synth;'
+node scripts/ultracode-cli.js review.steps.json
+node scripts/ultracode-cli.js @deep-research --args '{"topic":"Codex"}'
+```
+
+## Automatic updates
+
+Ultracode keeps itself fresh automatically. Before any command it runs
+`codex plugin marketplace upgrade <marketplace>` then `codex plugin add <plugin>@<marketplace>`, but **at most
+once per 24h** (tracked by a stamp file in the codex home) and **best-effort** — a failure (offline, marketplace
+down) never breaks the command; it only logs `[ultracode] auto-update skipped: …`. The refresh updates the
+installed cache for *future* Codex sessions; the current thread keeps the version it already loaded, so it never
+mutates the running command.
+
+- Opt out with `--no-auto-update` on any command, or `ULTRACODE_NO_AUTO_UPDATE=1` (or `ULTRACODE_AUTO_UPDATE=0`).
+- `marketplace`: marketplace name, default `just-every` (or `ULTRACODE_MARKETPLACE`).
+- `plugin`: plugin name, default from `.codex-plugin/plugin.json`.
+- `codex_bin`: Codex binary path (else `ULTRACODE_UPDATE_CODEX_BIN`, `CODEX_CLI_PATH`, or `codex`).
+
+## Fixed-role fan-out (task input)
+
+Reached via the one command — a `--task <t>` flag or a bare single-line positional sentence (no leading verb).
+Fans out the built-in fixed reviewer roles in parallel and returns structured findings (one terminal barrier).
 
 - `task`: natural-language objective (required unless `workers_spec` is given).
 - `cwd`: repository or workspace path. Use the current working directory when possible.
 - `workers`: 1-8. Use 3 for normal deep work, 5-6 for broad audits.
-- `model`: optional Codex model for child workers.
+- `model`: optional Codex model for child workers. **Omit by default** — a worker with no `model` runs on
+  Codex's configured default; pin a tier only when you're confident a different one fits the task, and prefer
+  setting it per-`workers_spec`/step rather than globally.
 - `reasoning_effort`: optional `low`, `medium`, `high`, or `xhigh`.
 - `sandbox`: default `read-only`. Use `workspace-write` or `danger-full-access` only when the user explicitly
   wants child workers to modify files.
@@ -74,8 +117,11 @@ Transport (opt-in; also settable via `ULTRACODE_TRANSPORT`):
   coerce to `exec`.
 - `transport_strict`: when `true`, an `app-server` failure errors instead of falling back. Default `false`.
 
-Arbitrary per-worker fan-out (the `agent()` parity path) — `workers_spec`: an array of worker specs that
-replaces the fixed roles. Each spec:
+### One-shot panel (`--workers-spec` input)
+
+Arbitrary per-worker fan-out (the `agent()` parity path) — reached via the one command with `--workers-spec
+<json>` or an inline JSON array of `{prompt}` objects **without** `id`. An array of worker specs that replaces
+the fixed roles (`runWorkflow` → `runExplicitWorkflow`; `record.options.explicit = true`). Each spec:
 
 - `prompt` (required): the worker's full instructions.
 - `label`: display label used in progress and aggregation.
@@ -84,13 +130,15 @@ replaces the fixed roles. Each spec:
 - `sandbox`, `model`, `reasoning_effort`, `phase`, `timeout_ms`, `cwd`: per-worker overrides.
 - `isolation: "worktree"`: run a writable worker in an isolated git worktree (its diff is collected back).
 
-## `pipeline` arguments
+## DAG input (`--steps` / `steps[]` JSON)
 
-A declarative directed-acyclic graph of stages. Scheduling is **barrier-free** (see _Pick a surface_ in
-`../SKILL.md` for why that's the default); the whole DAG is validated **before any spawn** — duplicate id,
-unknown/self dependency, and cycles all throw, with zero side effects.
+Reached via the one command — `--steps <json>`, a positional `*.json` file, or an inline JSON array whose objects
+carry `id` (`runPipelineSpec`; `record.options.pipeline = true`). A declarative directed-acyclic graph of stages.
+Scheduling is **barrier-free** (see _Pick a surface_ in `../SKILL.md` for why that's the default); the whole DAG
+is validated **before any spawn** — duplicate id, unknown/self dependency, and cycles all throw, with zero side
+effects.
 
-Top-level args mirror `run`'s orchestration controls — `cwd`, `sandbox`, `model`, `reasoning_effort`,
+Top-level args mirror the fan-out orchestration controls — `cwd`, `sandbox`, `model`, `reasoning_effort`,
 `timeout_ms`, `codex_bin`, `codex_home`, `concurrency`, `launch_stagger_ms`, `budget_tokens`, `max_agents`, the retry knobs,
 `transport`, `transport_strict`, and an optional descriptive `task` — plus:
 
@@ -150,11 +198,11 @@ one `ctx` (concurrency limiter, usage accumulator, `budget`, lifetime cap, progr
   vote from N skeptic workers (optionally with distinct lenses).
 - `validateAgainstSchema`, `createLimiter`, `sumUsageFromWorkers`, `log` are also exported.
 
-## Workflow scripts (`script`) — API surface
+## Workflow scripts (`*.js` / `--path` / `--source`) — API surface
 
 Plain async JavaScript with the engine primitives pre-bound into scope, so a multi-agent workflow reads like
 ordinary code with `await`, `map`/`filter`/`sort`, and arbitrary host-side reductions between agent calls. Drive
-it via `node scripts/ultracode-cli.js script <path> --args '<json>'` (positional path, or `--path` / `--source`).
+it via `node scripts/ultracode-cli.js <path> --args '<json>'` (positional path, or `--path` / `--source`).
 
 Bound scope (ctx is auto-injected — never pass it):
 
@@ -162,7 +210,14 @@ Bound scope (ctx is auto-injected — never pass it):
   ergonomic happy-path primitive.
 - `spawnWorker(prompt, opts?)` → the full `{status, value, result, usage, ...}` record (advanced).
 - `parallel(thunks)` → barrier gather; throwing thunk → `null`.
-- `pipeline(items, ...stages)` → **variadic**; each stage receives `(prev, item, index, ctx)`; barrier-free.
+- `pipeline(items, ...stages)` → **variadic**; each stage receives `(prev, item, index, ctx)`; barrier-free
+  per-item streaming over a list.
+- `fanout(taskOrSpecs, opts?)` → one bounded barrier; returns an array of worker values (`null` for failures),
+  exactly like `parallel()`. A string task expands to the built-in 1-8 fixed reviewer roles (`opts.workers`); an
+  array of `{prompt, label?, schema?, sandbox?, model?, …}` specs runs an arbitrary panel.
+- `dag(steps)` → run a declarative `depends_on` graph (`worker`/`parallel`/`verify`/`loop` kinds,
+  `{{steps.<id>.output}}` edges) on the live script `ctx`; returns an `{ [stepId]: output }` map and journals its
+  workers into the script record. **Distinct from `pipeline(items, ...stages)`** (per-item streaming over a list).
 - `loopUntilDry(makePrompt, opts?)`, `adversarialVerify(findings, opts?)` → as above; both inherit the current
   `phase()` by default inside scripts.
 - `log(message, data?)`, `phase(title)`, `workflow(pathOrSource, args?)` (one-level nested run).
@@ -181,15 +236,27 @@ Script records also include a source snapshot:
 - `script_path`: the saved source copy under `$CODEX_HOME/ultracode/scripts/`.
 - `source_path`: the original path when run from a file.
 - `source_hash`: SHA-256 of the script source.
-- `meta`: parsed Claude-style `export const meta = { name, description, phases }` when present.
-- `definition_ref`: saved-workflow identity when run through `workflow run`.
+- `meta`: parsed Claude-style `export const meta = { name, description, phases }` when present. Keep each
+  `meta.phases[].title` identical to the string passed to the matching `phase(...)` call: the live dashboard
+  groups workers by their runtime `phase()` title, while `meta.phases` (and its `detail`) is what the
+  saved-workflow library previews — mismatched titles leave a declared phase with no workers under it.
+- `definition_ref`: saved-workflow identity when run through the one command's `@name` / `--workflow <name>`
+  input.
 
 `resume_from_run_id` / `resumeFromRunId` enables explicit cached-call reuse for scripts. Completed prior
 `agent()` / `spawnWorker()` calls are reused only when the deterministic prompt+options cache key matches; changed
 calls spawn live workers. This is narrower than full arbitrary-JS step resume.
 
-## Saved workflow definitions (`workflow`)
+Unlike Claude Code's in-process Workflow scripts, the body runs as a plain (un-sandboxed) `AsyncFunction`, so
+`Date.now()`, `Math.random()`, and `new Date()` work normally — there is **no** determinism restriction. The
+one consequence to know: because reuse is keyed on a prompt+options hash, any volatile value you bake into a
+worker's *prompt* (a timestamp, a random id) changes that key and forces a live re-run on resume. Keep volatile
+values out of prompts — or pass them through `args` — when you want resume cache hits.
 
+## Saved workflow definitions (`workflow list|show|save|update|delete`)
+
+The `workflow` verb is the saved-definition **library** — `list`, `show`, `save`, `update`, `delete`. Run a
+saved definition through the one command's `@name` / `--workflow <name>` input.
 Saved definitions are JavaScript workflows discovered in this order:
 
 - `<cwd>/.claude/workflows/*.js`
@@ -201,18 +268,20 @@ Project definitions win when names collide.
 ```bash
 node scripts/ultracode-cli.js workflow list
 node scripts/ultracode-cli.js workflow show deep-research
-node scripts/ultracode-cli.js workflow run deep-research --args '{"topic":"Codex"}'
 node scripts/ultracode-cli.js workflow save deep-research --workflow-id ultra-...
 node scripts/ultracode-cli.js workflow save deep-research --source 'export const meta = { name: "Deep Research" }; return {};'
 node scripts/ultracode-cli.js workflow update deep-research --source-path .claude/workflows/deep-research.js
 node scripts/ultracode-cli.js workflow delete deep-research
+# Run a saved definition by name:
+node scripts/ultracode-cli.js @deep-research --args '{"topic":"Codex"}'
 ```
 
-`workflow run` turns on strict Claude-compat diagnostics and adapters before execution. Allowed workflow
-primitive imports are rewritten to the bound runtime, `export async function run(context)` is invoked
-automatically, and direct workflow-side filesystem/shell/host access fails explicitly before workers spawn.
-The dashboard server also exposes definition list/show/save/update/delete/run endpoints, and the React UI shows
-the workflow library with source editing and JSON-args run support.
+Running a saved definition (via `@name` / `--workflow <name>`) turns on strict Claude-compat diagnostics and
+adapters before execution. Allowed workflow primitive imports are rewritten to the bound runtime,
+`export async function run(context)` is invoked automatically, and direct workflow-side filesystem/shell/host
+access fails explicitly before workers spawn. The dashboard server also exposes definition
+list/show/save/update/delete/run endpoints, and the React UI shows the workflow library with source editing and
+JSON-args run support.
 
 ## Warm-context executor & transport (opt-in)
 
@@ -224,10 +293,10 @@ workers_ and _Worker transport_ in `README.md`.
 
 ## Cancellation
 
-For `run`, `pipeline`, `resume`, and `script`, the first Ctrl-C aborts the in-flight run and prints the
+For the one execution command and `resume`, the first Ctrl-C aborts the in-flight run and prints the
 partially-completed persisted workflow (status `cancelled`, resumable from its journal); a second Ctrl-C
-hard-exits 130. Opt out with `--no-cancel-on-sigint` or `ULTRACODE_NO_SIGINT`. (`plan` and `status` never
-intercept Ctrl-C.)
+hard-exits 130. Opt out with `--no-cancel-on-sigint` or `ULTRACODE_NO_SIGINT`. (`status` and the `workflow`
+library verbs never intercept Ctrl-C.)
 
 ## Limits
 

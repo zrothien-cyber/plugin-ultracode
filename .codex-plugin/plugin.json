@@ -1,7 +1,7 @@
 {
   "name": "ultracode",
   "version": "0.3.0+codex.20260601143116",
-  "description": "Fan out Codex subprocess workers for deep code investigation, planning, and review: a declarative pipeline DAG, an imperative Workflow-script runner, pluggable transports (exec / app-server), warm-context resume, transient-error retry, budgets, and journaled resume.",
+  "description": "Fan out Codex subprocess workers for deep code investigation, planning, review, and edits — through one command that takes a task fan-out, a barrier-free steps[] DAG, an imperative Workflow script, or a saved workflow. Adds adversarial verification, budgets, journaled resume, a live run dashboard, pluggable transports (exec / app-server), warm-context resume, and transient-error retry.",
   "author": {
     "name": "Just Every",
     "url": "https://github.com/just-every"
@@ -33,7 +33,7 @@
   "interface": {
     "displayName": "Ultracode",
     "shortDescription": "Run parallel Codex worker workflows",
-    "longDescription": "Ultracode gives Codex a subprocess-backed workflow engine for parallel investigation, planning, verification, and edits. Workers can run read-only, workspace-write, or in an isolated git worktree, and are reachable three ways: the fixed-role / workers_spec fan-out, a declarative pipeline DAG, and an opt-in imperative Workflow-script runner. It adds a local React run dashboard, budgets, journaled resume, adversarial verification, warm-context resume, transient-error retry with backoff, and a pluggable transport (exec or app-server). Worker results are returned to the parent thread for visible synthesis and implementation.",
+    "longDescription": "Ultracode gives Codex a subprocess-backed workflow engine for parallel investigation, planning, verification, and edits. Workers run read-only by default, or writable in an isolated git worktree whose diff is collected back. There is one command: hand it a task sentence (fixed-role fan-out), a steps[] DAG (barrier-free), a workers_spec[] panel, an imperative Workflow script (with fanout()/dag() helpers), or a saved @workflow. A live React run dashboard streams every worker; it adds budgets, journaled resume, adversarial and perspective-diverse verification, warm-context resume, transient-error retry with backoff, and a pluggable transport (exec or app-server). Worker output returns to the parent thread, which synthesizes the evidence and integrates the result.",
     "developerName": "Just Every",
     "category": "Developer Tools",
     "capabilities": [

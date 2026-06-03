@@ -1,8 +1,12 @@
 # Ultracode cookbook — runnable skeletons
 
 Copy-pasteable, code-verified starting points. Read the one that matches your task *before* you write a
-`pipeline` or `script` — the captions call out the constraints a model gets wrong. Field/flag details are in
-`cli.md`; the why-and-when is in `../SKILL.md` and `quality-patterns.md`.
+`--steps` DAG or an imperative script — the captions call out the constraints a model gets wrong. Field/flag details are
+in `cli.md`; the why-and-when is in `../SKILL.md` and `quality-patterns.md`.
+
+Everything runs through ONE verb-less command — `node scripts/ultracode-cli.js <input> [flags]`. The input
+selects what runs: a `--steps`/`*.json` DAG, `--workers-spec` for a flat panel, a positional `*.js` / `--source` for
+imperative JS, a bare task sentence for the fixed-role fan-out, or `@<name>` for a saved workflow.
 
 Every skeleton runs for free against the mock Codex (no paid calls): prefix with
 `CODEX_HOME=$(mktemp -d) CODEX_CLI_PATH=test/fixtures/mock-codex.js`.
@@ -15,7 +19,7 @@ The barrier-free pattern: `sec_v` starts the moment `sec` resolves — while `pe
 waits for everything; only `synth` waits for both verified branches.
 
 ```bash
-node scripts/ultracode-cli.js pipeline --progress --steps '[
+node scripts/ultracode-cli.js --progress --steps '[
   { "id": "sec",
     "prompt": "Find security bugs in the changed files. Cite file:line for each; put them in `findings`." },
   { "id": "perf",
@@ -40,13 +44,34 @@ Three constraints this skeleton encodes — get any wrong and the DAG throws bef
   renders downstream.
 - `synth` uses `"schema": null` for a free-text report instead of the structured `WORKER_SCHEMA`.
 
+The same graph runs inside a script via `dag(steps)` — same `depends_on` / `{{steps.<id>.output}}` edges, same
+worker/parallel/verify/loop kinds — when you need to read the result in JS or feed it onward. It returns an
+`{ [stepId]: output }` map and journals its workers into the script record:
+
+```js
+const out = await dag([
+  { id: "sec",  prompt: "Find security bugs in the changed files. Cite file:line; put them in `findings`." },
+  { id: "perf", prompt: "Find performance bugs in the changed files. Cite file:line; put them in `findings`." },
+  { id: "sec_v",  kind: "verify", depends_on: ["sec"],  findings_from: "sec",
+    skeptics: 3, lenses: ["correctness", "security"],       prompt: "verify security findings" },
+  { id: "perf_v", kind: "verify", depends_on: ["perf"], findings_from: "perf",
+    skeptics: 3, lenses: ["correctness", "reproducibility"], prompt: "verify performance findings" },
+  { id: "synth", depends_on: ["sec_v", "perf_v"], schema: null,
+    prompt: "Merge these verified findings into one report.\nSecurity (survived):\n{{steps.sec_v.output}}\nPerformance (survived):\n{{steps.perf_v.output}}" }
+]);
+export default { report: out.synth };   // out.synth is the merged free-text report
+```
+
+`dag()` is distinct from `pipeline(items, ...stages)` (skeleton 5): `dag` runs a fixed declarative `depends_on`
+graph; `pipeline` streams a *list* per-item through ordered stages.
+
 ---
 
 ## 2. Composed exhaustive-audit harness — find → dedup-vs-seen → diverse-lens verify → loop-until-dry, under budget
 
 The canonical "be exhaustive" loop. Hand-rolled `while` (not `loopUntilDry`) because it must inject the running
 `seen` set into each round so a re-find counts as dry. Save as `exhaustive-audit.workflow.js`, run with
-`node scripts/ultracode-cli.js script exhaustive-audit.workflow.js --budget-tokens 800000 --concurrency 6 --progress`.
+`node scripts/ultracode-cli.js exhaustive-audit.workflow.js --budget-tokens 800000 --concurrency 6 --progress`.
 
 ```js
 const seen = new Set();   // dedup vs SEEN (everything found), NOT vs confirmed — else rejected findings reappear and it never goes dry
@@ -116,7 +141,7 @@ Don't default to the generic `WORKER_SCHEMA` string-array `findings`. Design the
 downstream stages key on:
 
 ```bash
-node scripts/ultracode-cli.js run --progress --workers-spec '[
+node scripts/ultracode-cli.js --progress --workers-spec '[
   {
     "label": "sec-finder",
     "prompt": "Find security bugs in src/. Cite the exact file and line for each.",
@@ -146,6 +171,22 @@ The engine validates at the tool layer and retries once on mismatch (`schemaRetr
 schema is set). `additionalProperties: false` makes the model drop stray keys. A typed `findings` array like
 this is exactly what a downstream `verify` step votes on (`findings_path` defaults to `findings`) and what your
 dedup compares — far more useful than an untyped string blob.
+
+The same flat panel runs inside a script via `fanout(specs)` — one bounded barrier over an array of
+`{prompt, label?, schema?, sandbox?, model?, ...}` specs, returning an array of worker values (`null` per
+failure), exactly like `parallel()`:
+
+```js
+const panel = await fanout([
+  { label: "sec-finder", schema: SEC_SCHEMA, prompt: "Find security bugs in src/. Cite the exact file and line for each." },
+  { label: "perf-finder",                    prompt: "Find performance bugs in src/. Cite the exact file and line for each." }
+]);
+const findings = panel.filter(Boolean).flatMap((r) => r.findings || []);
+```
+
+Passing a single task *string* instead — `fanout("review the auth refactor", { workers: 5 })` — expands the
+built-in 1-8 fixed reviewer roles, the in-script twin of `node scripts/ultracode-cli.js "review the auth
+refactor" --workers 5`.
 
 ---
 

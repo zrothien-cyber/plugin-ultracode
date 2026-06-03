@@ -168,7 +168,10 @@ const SCOPE_PARAMS = [
   "args",
   "ctx",
   "WORKER_SCHEMA",
-  "VERDICT_SCHEMA"
+  "VERDICT_SCHEMA",
+  // Appended at the END so existing positional AsyncFunction slots never shift.
+  "fanout",
+  "dag"
 ];
 
 // ---------------------------------------------------------------------------
@@ -282,6 +285,83 @@ function buildScope(ctx, input, hooks = {}) {
     return engine.adversarialVerify(findings, { ...spawnDefaults, phase: currentPhase, ...opts, ctx });
   }
 
+  // fanout(taskOrSpecs, opts?) -> ONE bounded barrier of workers (the old `run`
+  // surface, in-scope). A string task expands to the built-in fixed reviewer
+  // roles (1-8); an array of {prompt,...} specs runs an arbitrary panel. Returns
+  // an array of worker values (null for failures), exactly like parallel().
+  async function fanout(taskOrSpecs, opts = {}) {
+    if (Array.isArray(taskOrSpecs)) {
+      return parallel(
+        taskOrSpecs.map((spec) => () => {
+          if (!spec || typeof spec.prompt !== "string" || !spec.prompt.trim()) {
+            throw new Error("fanout(specs): each spec needs a non-empty `prompt`.");
+          }
+          return agent(spec.prompt, {
+            label: spec.label,
+            sandbox: spec.sandbox,
+            model: spec.model,
+            reasoningEffort: spec.reasoning_effort || spec.reasoningEffort,
+            timeoutMs: spec.timeout_ms || spec.timeoutMs,
+            isolation: spec.isolation,
+            phase: spec.phase || currentPhase,
+            schema: "schema" in spec ? spec.schema : engine.WORKER_SCHEMA
+          });
+        })
+      );
+    }
+    const task = String(taskOrSpecs || "").trim();
+    if (!task) {
+      throw new Error("fanout(task): pass a non-empty task string or an array of {prompt} specs.");
+    }
+    const count = Math.min(Math.max(1, Math.floor(Number(opts.workers) || 3)), engine.MAX_WORKERS);
+    const sandbox = opts.sandbox || "read-only";
+    const pseudoWorkflow = { id: "script", cwd: input.cwd || process.cwd() };
+    return parallel(
+      engine.selectRoles(count).map((role) => () =>
+        agent(engine.workerPrompt({ task, workflow: pseudoWorkflow, worker: role, sandbox }), {
+          label: role.title,
+          schema: engine.WORKER_SCHEMA,
+          sandbox,
+          model: opts.model,
+          reasoningEffort: opts.reasoning_effort || opts.reasoningEffort,
+          phase: opts.phase || currentPhase
+        })
+      )
+    );
+  }
+
+  // dag(steps) -> run a declarative depends_on graph (the old `pipeline`
+  // surface, in-scope) on the live ctx via the SAME scheduler runPipelineSpec
+  // uses. Returns an { [stepId]: output } map; its workers journal into the
+  // script record through the same ctx hooks as agent()/parallel().
+  async function dag(steps) {
+    const defaults = {
+      cwd: input.cwd ? path.resolve(input.cwd) : process.cwd(),
+      sandbox: input.sandbox || "read-only",
+      model: typeof input.model === "string" && input.model.trim() ? input.model.trim() : undefined,
+      reasoning_effort: input.reasoning_effort || input.reasoningEffort,
+      timeout_ms:
+        input.timeout_ms === undefined || input.timeout_ms === null
+          ? undefined
+          : Math.max(1000, Math.floor(Number(input.timeout_ms))),
+      executor: "cold"
+    };
+    const { compiled } = engine._internal.compileSteps(steps, defaults);
+    const retry = engine._internal.resolveRetryInput(input);
+    const results = await engine.runDagOnCtx(compiled, ctx, {
+      codexBin: spawnDefaults.codex_bin,
+      codexHomeValue: spawnDefaults.codex_home,
+      retryWorker: retry.worker,
+      transport: input.transport,
+      transportStrict: input.transport_strict || input.transportStrict
+    });
+    const out = {};
+    for (const step of compiled) {
+      out[step.id] = results.has(step.id) ? results.get(step.id).output : undefined;
+    }
+    return out;
+  }
+
   // log(message, data?) routes through the engine's narrator so script lines
   // land in ctx.events alongside primitive logs.
   function log(message, data) {
@@ -371,6 +451,8 @@ function buildScope(ctx, input, hooks = {}) {
     spawnWorker,
     parallel,
     pipeline,
+    fanout,
+    dag,
     loopUntilDry,
     adversarialVerify,
     phase,
@@ -395,7 +477,9 @@ function buildScope(ctx, input, hooks = {}) {
     args: input.args,
     ctx,
     WORKER_SCHEMA: engine.WORKER_SCHEMA,
-    VERDICT_SCHEMA: engine.VERDICT_SCHEMA
+    VERDICT_SCHEMA: engine.VERDICT_SCHEMA,
+    fanout,
+    dag
   };
 }
 

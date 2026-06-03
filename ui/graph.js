@@ -1,16 +1,11 @@
 import {
-  BookOpen,
-  Code2,
-  Database,
-  FileText,
-  FlaskConical,
-  ListChecks,
-  Search,
-  Shield,
-  Wrench
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  CircleSlash,
+  Clock3
 } from "./icons.js";
-import { formatDuration, fullOutputText, fullText } from "./state.js";
-import { OutputViewer } from "./output-viewer.js";
+import { agentDisplayCode, formatDuration } from "./state.js";
 import { OrbScene } from "./orb-scene.js";
 
 const React = window.React;
@@ -45,39 +40,21 @@ function graphStatus(record, groups) {
   return aggregateStatus(groups.flatMap((group) => group.nodes || []));
 }
 
-function iconForGroup(label) {
-  const normalized = String(label || "").toLowerCase();
-  const props = { size: 22, strokeWidth: 2.2 };
-  if (normalized.includes("review") || normalized.includes("audit")) return h(Search, props);
-  if (normalized.includes("security")) return h(Shield, props);
-  if (normalized.includes("implement") || normalized.includes("patch") || normalized.includes("build")) return h(Code2, props);
-  if (normalized.includes("test")) return h(FlaskConical, props);
-  return h(ListChecks, props);
+function iconForStatus(status, props) {
+  const normalized = normalizeStatus(status);
+  if (normalized === "completed") return h(CheckCircle2, props);
+  if (normalized === "failed") return h(AlertTriangle, props);
+  if (normalized === "running") return h(Activity, props);
+  if (normalized === "cancelled") return h(CircleSlash, props);
+  return h(Clock3, props);
 }
 
-function iconForNode(node) {
-  const text = `${node.kind || ""} ${node.title || ""} ${node.label || ""}`.toLowerCase();
-  const props = { size: 17, strokeWidth: 2.15 };
-  if (text.includes("review") || text.includes("scan") || text.includes("audit")) return h(Search, props);
-  if (text.includes("security") || text.includes("risk")) return h(Shield, props);
-  if (text.includes("db") || text.includes("database") || text.includes("migration")) return h(Database, props);
-  if (text.includes("test") || text.includes("harness")) return h(FlaskConical, props);
-  if (text.includes("config") || text.includes("update")) return h(Wrench, props);
-  if (text.includes("doc")) return h(BookOpen, props);
-  if (text.includes("code") || text.includes("patch") || text.includes("schema") || text.includes("api")) return h(Code2, props);
-  return h(FileText, props);
+function iconForGroupStatus(status) {
+  return iconForStatus(status, { size: 22, strokeWidth: 2.2 });
 }
 
-function groupCode(label, index) {
-  const letters = String(label || "WK")
-    .replace(/[^A-Za-z0-9 ]+/g, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-  return `${letters || "WK"}-${String(index + 1).padStart(2, "0")}`;
+function iconForNodeStatus(status) {
+  return iconForStatus(status, { size: 17, strokeWidth: 2.15 });
 }
 
 function nodeMetric(node) {
@@ -89,21 +66,6 @@ function nodeMetric(node) {
 
 function StatusChip({ status }) {
   return h("span", { className: `ledger-chip status-${status || "pending"}` }, STATUS_LABELS[status] || "Pending");
-}
-
-function AgentDetails({ node }) {
-  const output = fullOutputText(node);
-  const prompt = node && node.spec && node.spec.prompt ? fullText(node.spec.prompt) : "";
-  return h(
-    "div",
-    { className: "agent-details" },
-    h(OutputViewer, {
-      title: node && node.error ? "Error" : "Output",
-      value: output || "No output recorded yet.",
-      danger: Boolean(node && node.error)
-    }),
-    prompt ? h(OutputViewer, { title: "Prompt", value: prompt }) : null
-  );
 }
 
 function AgentNode({ node, code, selected, onSelect, setNodeRef }) {
@@ -122,12 +84,11 @@ function AgentNode({ node, code, selected, onSelect, setNodeRef }) {
         type: "button"
       },
       h("span", { className: "agent-code" }, code),
-      h("span", { className: "agent-glyph" }, iconForNode(node)),
+      h("span", { className: `agent-glyph status-${normalizeStatus(node.status)}` }, iconForNodeStatus(node.status)),
       h("span", { className: "agent-title" }, node.title),
       h("span", { className: "agent-time" }, nodeMetric(node)),
       h(StatusChip, { status: node.status })
-    ),
-    selected ? h(AgentDetails, { node }) : null
+    )
   );
 }
 
@@ -193,12 +154,9 @@ function measuredConnectors(rootElement, laneElements, nodeElements, status) {
     const groupRailStartY = lane.headingBottomY;
     const laneAnimated = lane.status === "running";
     paths.push(connectorPath(`M ${railX} ${lane.headingY} L ${lane.headingX} ${lane.headingY}`, lane.status, laneAnimated));
-    circles.push(circleAt(railX, lane.headingY, 10, lane.status));
     if (lane.nodes.length > 0) {
       const groupRailBottomY = Math.max(...lane.nodes.map((node) => node.y));
-      paths.push(connectorPath(`M ${lane.headingX} ${lane.headingY} L ${groupRailX} ${lane.headingY} L ${groupRailX} ${groupRailStartY}`, lane.status, laneAnimated));
       paths.push(connectorPath(`M ${groupRailX} ${groupRailStartY} L ${groupRailX} ${groupRailBottomY}`, lane.status, laneAnimated));
-      circles.push(circleAt(groupRailX, groupRailStartY, 9, lane.status));
     }
     lane.nodes.forEach((node) => {
       paths.push(connectorPath(`M ${groupRailX} ${node.y} L ${node.x} ${node.y}`, node.status, node.status === "running"));
@@ -308,14 +266,15 @@ export function WorkflowGraph({ record, graph, selectedId, onSelect }) {
     h(
       "div",
       { className: "phase-grid" },
-      groups.map((group) =>
-        h(
+      groups.map((group) => {
+        const groupStatus = aggregateStatus(group.nodes);
+        return h(
           "section",
           { className: "phase-lane", key: group.id, ref: (element) => setLaneRef(group.id, element) },
           h(
             "header",
-            { className: "phase-heading" },
-            h("span", { className: "phase-icon" }, iconForGroup(group.label)),
+            { className: `phase-heading status-${groupStatus}` },
+            h("span", { className: `phase-icon status-${groupStatus}` }, iconForGroupStatus(groupStatus)),
             h("strong", null, group.label),
             h("span", null, `${group.nodes.length} agents`)
           ),
@@ -323,11 +282,11 @@ export function WorkflowGraph({ record, graph, selectedId, onSelect }) {
             "div",
             { className: "node-stack" },
             group.nodes.length
-              ? group.nodes.map((node, index) =>
+              ? group.nodes.map((node) =>
                   h(AgentNode, {
                     key: node.id,
                     node,
-                    code: groupCode(group.label, index),
+                    code: agentDisplayCode(node),
                     selected: node.id === selectedId,
                     onSelect,
                     setNodeRef
@@ -335,8 +294,8 @@ export function WorkflowGraph({ record, graph, selectedId, onSelect }) {
                 )
               : h("p", { className: "empty-lane" }, "No workers in this group.")
           )
-        )
-      )
+        );
+      })
     )
   );
 }

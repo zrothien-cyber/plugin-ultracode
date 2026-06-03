@@ -1,12 +1,12 @@
 // ultracode example: parallel fan-out -> filter -> map -> sort reduction.
 //
 // Run it (against the real codex, or the mock for a dry run):
-//   node scripts/ultracode-cli.js script examples/parallel-reduce.workflow.js \
+//   node scripts/ultracode-cli.js examples/parallel-reduce.workflow.js \
 //     --args '{"files":["src/a.js","src/b.js","src/c.js"]}'
 //
 // To exercise it for free against the mock codex:
 //   CODEX_CLI_PATH=test/fixtures/mock-codex.js \
-//   node scripts/ultracode-cli.js script examples/parallel-reduce.workflow.js \
+//   node scripts/ultracode-cli.js examples/parallel-reduce.workflow.js \
 //     --args '{"files":["a.js","b.js","c.js"]}' --concurrency 3
 //
 // WARNING: a script runs arbitrary Node.js in-process with full host

@@ -8,22 +8,31 @@ description: Use when the user asks for Ultracode, deep parallel code investigat
 Ultracode gives Codex an orchestration engine that mirrors Claude Code's Workflow tool — `spawnWorker` (agent),
 `runParallel` (fan out, wait for all), `runPipeline` (stream each item stage-to-stage), schema-validated
 structured output, a shared concurrency cap, token-budget gating, progress events, journaled resume, and
-quality helpers — all driven by real `codex exec` subprocesses. Four surfaces reach it: a fixed-role /
-`workers_spec` fan-out (`run`), a declarative DAG (`pipeline`), an imperative Workflow-script runner
-(`script`), and Claude-style saved workflow definitions (`workflow`).
+quality helpers — all driven by real `codex exec` subprocesses. **One command runs it all**: hand
+`ultracode <input>` a task sentence, a `steps[]` DAG, an imperative script, a `workers_spec[]` panel, or a saved
+workflow name, and it routes to the right engine path for you.
 
-This file is the **decision layer** — read it to decide whether, at what scale, and with which surface to use
-Ultracode. Pull depth from `references/` only when you're actually building:
+**The workflow does the work; you orchestrate it.** The whole point is to *hand the task to a fleet of workers* —
+let them sweep the files, run the passes, verify each finding — while you stay in the loop: deciding what to fan
+out, reading the evidence that comes back, and integrating the result. The failure mode to avoid is the
+opposite: doing the investigation yourself in the parent thread and bolting on a worker or two as a sidecar. If
+you catch yourself reading files and reasoning through the whole task *before* (or *instead of*) spawning
+workers, you're under-using the engine. Scout only enough to scope the work, then delegate the work itself.
+
+This file is the **decision layer** — read it to decide whether and at what scale to use Ultracode, and how to
+shape the run. Pull depth from `references/` only when you're actually building:
 
 | When you're… | Read |
 | --- | --- |
 | choosing a quality/verification/discovery pattern, or inventing one | `references/quality-patterns.md` |
-| about to write a `pipeline --steps` or a `script` — get the shape right first | `references/cookbook.md` |
+| about to write a `steps[]` DAG or a `script` — get the shape right first | `references/cookbook.md` |
 | needing an exact flag, step field, primitive signature, or the `script` API | `references/cli.md` |
 
 ## When to reach for Ultracode
 
-Reach for it when one of three things is true — and skip it otherwise:
+When this skill is in play, **default to orchestrating** — author a workflow and let it run the task. Work solo
+only when the task is genuinely trivial, local, or already known. A fan-out earns its overhead when one of three
+things is true:
 
 - **Be comprehensive.** The task means sweeping many files, modules, or call sites and you want them covered in
   parallel: broad audits, "find every X", understanding a whole subsystem.
@@ -32,80 +41,119 @@ Reach for it when one of three things is true — and skip it otherwise:
 - **Take on scale one pass can't hold.** Migrations, repo-wide sweeps, investigations whose evidence won't fit a
   single thread's attention.
 
-If the task is small, local, or you already know the answer, work directly — a `codex exec` fan-out has real
-overhead (subprocess startup, no shared memory, synthesis cost). Ultracode earns it through breadth or
-independent verification, not raw speed.
+A `codex exec` fan-out has real overhead (subprocess startup, no shared memory, synthesis cost), so a one-file
+question you already understand is not worth it. But under *this* skill the more common mistake is the reverse —
+staying solo on work that wanted a fleet. When in doubt, orchestrate.
+
+**You don't need the shape before the task — only before the orchestration step.** The right move is often
+*hybrid*: scout inline first (list the files, scope the diff, find the call sites), then hand that work-list to a
+`dag` / `fanout` over it. Discovering the work-list is parent work; doing the work on each item is the
+fleet's.
+
+**Chain workflows across phases.** Big work is rarely one fan-out. Run several in sequence —
+understand → design → implement → review — reading each result before launching the next. Each run is one
+well-scoped fan-out and you stay in the loop between them. A multi-stage task is *more* orchestration, not a
+reason to drop back to solo.
 
 **Scale to the request.** Match worker count and verification depth to what was asked:
 
 - "Take a quick look" → 2-3 finders, single-vote verify (or none).
-- "Review this change" → a fixed-role `run` (3-5 workers) + an adversarial pass over the findings.
+- "Review this change" → a fixed-role fan-out (3-5 workers) + an adversarial pass over the findings.
 - "Thoroughly audit / be exhaustive / sign off on this" → a large finder pool or a loop-until-dry, a 3-5 vote
   adversarial pass with distinct lenses, then a synthesis stage.
 
-Don't run a six-worker audit for a one-file question, and don't run three finders when asked to be exhaustive.
+The smell test for *this* skill: if you spawned one worker and did the rest yourself, you **under**-orchestrated —
+the common miss here. (Over-orchestration has its own smell — a barrier around a per-item transform — in *Barrier
+vs barrier-free* below.) Don't run a six-worker audit for a one-file question, and don't run three finders when
+asked to be exhaustive.
 
 ## Operating rules
 
-- **Use a Codex goal for complex Ultracode tasks.** When the task is broad, risky, multi-stage, or likely to
-  continue after worker synthesis, the parent Codex thread should create its own goal before starting Ultracode.
-  Prefix the goal objective with `Use $ultracode to ...` so every continuation cycle sees the skill trigger
-  again and keeps using Ultracode until the goal is settled. The goal guards against ending too early: run
-  Ultracode, synthesize the evidence, make any edits, verify the result, then mark the parent goal complete or
-  blocked only when that top-level outcome is genuinely settled.
+- **Delegate the work — including the implementation; you integrate, you don't re-author.** Hand investigation,
+  analysis, verification, *and the edits themselves* to the workers — and the **larger the change, the more it
+  should be the fleet's, not yours**. A migration, a repo-wide rename, a codemod across many files is the *most*
+  valuable thing to fan out, not a reason to fall back to doing it solo. You do **not** keep work visible by
+  re-typing it in the parent: the run dashboard streams every worker's activity and output live, and worktree
+  writers' diffs come back on the record. So for a change that fans out, give the writers `isolation: "worktree"`
+  (it upgrades read-only workers to `workspace-write` and collects each diff back), then your job is to **review
+  and apply those diffs**, not redo the work by hand. Author edits directly in the parent only for the small,
+  local change you wouldn't have spun up a workflow for. Always: scope the fan-out, read every result (failures
+  and low-confidence notes included), merge duplicates, prefer concrete file/line evidence, integrate, then
+  verify — never redo in the parent what you just delegated.
 - **Verify before you trust.** Default to an adversarial pass over your own findings before you act on or
   report them; skip verification only when the finding is trivial or already independently verified. The bar is
   to skip it, not to perform it.
 - Keep workers **read-only** (`sandbox: read-only`, the default) unless the user explicitly wants writable child
-  runs. For parallel writers, prefer `isolation: "worktree"` so their diffs don't collide.
+  runs. For parallel writers you **must** use `isolation: "worktree"`, or their diffs collide in one cwd.
 - Treat worker failures as **real failures**. A failed, timed-out, or refuted worker resolves to `null` / a
-  `{status:"failed"}` record — filter it out; never substitute guessed output for it.
-- **Start and surface the dashboard first.** Leave the run UI enabled unless the user explicitly disables it.
-  `run`, `pipeline`, `resume`, and `script` emit a `ui.ready` event and store `record.ui.url` for the local
-  React dashboard. As soon as `ui.ready` appears, open that URL in the Codex in-app browser when an `iab` browser
-  is available. If the in-app browser is unavailable, immediately print the URL as a normal clickable Markdown
-  link or bare URL, never in a code block or inline code, so the user can open it while the run is active. If the
-  progress stream was not available, use the final `record.ui.url` the same way.
-- **Synthesize in the parent thread.** Read every result (including failures and low-confidence notes), merge
-  duplicates, prefer concrete file/line evidence over generic advice, make the actual edits yourself so the
-  meaningful implementation stays visible in the Codex app/TUI, then run normal verification after applying.
+  `{status:"failed"}` record — filter it out; never substitute guessed output for it. A timed-out worker (default
+  20 min) is **not** retried — transient-error retries are opt-in via `max_retries` (default `0`) and never cover
+  a timeout — so don't set a tight `timeout_ms` for deep work, and read a thin result set as evidence of failures,
+  not of a clean codebase.
+- **Use a Codex goal for complex Ultracode tasks**, prefixing the objective with `Use $ultracode to ...` so
+  every continuation re-triggers this skill. The goal guards against ending after the worker summary but before
+  the work is done: clear it only once the top-level outcome — synthesis, edits, verification — is genuinely
+  settled. (Procedure: README "Pair with Codex goals".)
+- **Surface the dashboard.** Leave the run UI on; the moment `ui.ready` fires (or from the final `record.ui.url`)
+  open the URL in the Codex in-app browser, else print it as a plain clickable link so the user can watch the run
+  live. (Mechanics and flags: `references/cli.md`.)
 
-## Pick a surface
+## Write the workflow
 
-Four surfaces reach the same engine, in increasing expressiveness. Default to the barrier-free ones.
+There is **one command and one surface**. Hand `ultracode <input>` the work and it routes by what you give it:
 
-- **`run`** — a flat fan-out: every worker runs at once and you get all results back together (one barrier at
-  the end). Use for a single bounded pass with no data flow between workers — a fixed-role review, or a
-  `workers_spec[]` panel of arbitrary prompts/schemas.
-- **`pipeline`** (declarative DAG) — **barrier-free**: each step starts the instant *its own* `depends_on`
-  resolve, so a finding from one branch can already be verifying while another branch is still finding. The
-  default for multi-stage work. Cross-stage data flows by rendering `{{steps.<id>.output}}` tokens.
-- **`script`** — imperative JavaScript with the primitives bound into scope (`agent`, `parallel`, `pipeline`,
-  `loopUntilDry`, `adversarialVerify`, `budget`, …). The only surface that combines agents with arbitrary
-  host-side control flow — loops, `map`/`filter`/`sort`, reductions, budget-driven branching. Reach for it when
-  the orchestration logic itself is dynamic.
-- **`workflow`** — saved Claude-style workflow definitions. Use when the user wants `.claude/workflows`
-  compatibility, slash-command-like named runs, or to save/re-run a script. It discovers project definitions
-  before user and `$CODEX_HOME` definitions, parses `export const meta`, supports Claude-compatible
-  `run(context)` and workflow primitive imports, and fails explicitly on direct workflow-side host access.
+- a **task sentence** (`ultracode "review the auth refactor" --workers 5`) → a fixed-role fan-out: each of 1-8
+  built-in reviewer roles works the one shared task (one terminal barrier);
+- a **`steps[]` DAG** (`ultracode --steps '[…]'`, or a positional `.json` file) → a **barrier-free**
+  `depends_on` graph with `worker`/`parallel`/`verify`/`loop` steps and `{{steps.<id>.output}}` edges;
+- a **`workers_spec[]`** array of `{prompt}` (`ultracode --workers-spec '[…]'`) → an arbitrary one-shot panel;
+- an **imperative script** (`ultracode --source '…'`, or a `.js` path) → plain async JS with the primitives
+  bound into scope (`agent`, `parallel`, `pipeline`, `fanout`, `dag`, `loopUntilDry`, `adversarialVerify`,
+  `budget`, …);
+- a **saved workflow** (`ultracode @deep-research --args '…'`) → a `.claude/workflows` definition.
 
-**Barrier vs barrier-free.** Prefer barrier-free staging (`pipeline` DAG, or the script `pipeline()`), where
-each item streams through every stage independently. *Why it's the default:* a barrier-free pipeline's
-wall-clock is the slowest single-item chain (find→verify for one item), **not** the sum of stages and not
-"slowest finder, then slowest verifier." A barrier makes every lane wait for the slowest before any advances —
-if 5 finders run and the slowest takes 3× the fastest, a barrier idles the 4 fast lanes for two-thirds of their
-time while item A could already be verifying. You pay that idle only to gain a cross-item view.
+**The script is the superset — reach for it the moment your orchestration is dynamic** (loops, `map`/`filter`,
+reductions, budget-driven branching). Two in-scope helpers cover the common shapes without ceremony:
+**`fanout(specs | task, {workers})`** (a single bounded barrier — the panel or fixed-role fan-out) and
+**`dag(steps)`** (a barrier-free `depends_on` graph). Save and re-run any input by name with
+`ultracode workflow save <name> …`, then `ultracode @<name>`. (Lifecycle stays its own verbs: `status` inspects
+a run's journal, `resume` re-runs from it.)
 
-So a barrier — `run`, or a script `parallel()` whose results you collect before the next stage — is justified
-**only** when a stage genuinely needs *all* prior-stage results at once:
+**Barrier vs barrier-free.** Prefer barrier-free staging (a `dag`, or the script `pipeline()`), where each item
+streams through every stage independently. *Why it's the default:* a barrier-free pipeline's wall-clock is the
+slowest single-item chain (find→verify for one item), **not** the sum of stages and not "slowest finder, then
+slowest verifier." A barrier makes every lane wait for the slowest before any advances — if 5 finders run and
+the slowest takes 3× the fastest, a barrier idles the 4 fast lanes for two-thirds of their time. So a barrier —
+a `fanout()`, or a script `parallel()` whose results you collect before the next stage — is justified **only**
+when a stage genuinely needs *all* prior-stage results at once: dedup/merge across the full set before expensive
+downstream work, a zero-count early-exit ("0 findings → skip verification entirely"), or a stage whose prompt
+compares one finding against all the others. It is NOT justified by "I need to flatten/filter the results first"
+— a per-item transform needs only that item's own output, so it stays a barrier-free stage. (The
+`parallel → transform → parallel` mistake and its one-pipeline rewrite is worked in `references/cookbook.md` §5.)
+When in doubt, stay barrier-free.
 
-- dedup or merge across the full result set before expensive downstream work,
-- early-exit when the total count is zero ("0 findings → skip verification entirely"),
-- a stage whose prompt compares one finding against all the others.
+**One composed run, inline.** A review that fans out, verifies each branch the instant its finder resolves, and
+synthesizes the survivors — you launch it, then read back the report:
 
-It is NOT justified by "I need to flatten/filter the results first" — a per-item filter/transform needs only
-that item's own prior output, so it stays a barrier-free stage. (The `parallel → transform → parallel` mistake,
-and its one-pipeline rewrite, is worked in `references/cookbook.md` §5.) When in doubt, stay barrier-free.
+```bash
+node scripts/ultracode-cli.js --progress --steps '[
+  { "id": "sec",  "prompt": "Find security bugs in the changed files. Cite file:line; put them in `findings`." },
+  { "id": "perf", "prompt": "Find performance bugs in the changed files. Cite file:line; put them in `findings`." },
+
+  { "id": "sec_v",  "kind": "verify", "depends_on": ["sec"],  "findings_from": "sec",
+    "skeptics": 3, "lenses": ["correctness", "security"],        "prompt": "verify" },
+  { "id": "perf_v", "kind": "verify", "depends_on": ["perf"], "findings_from": "perf",
+    "skeptics": 3, "lenses": ["correctness", "reproducibility"], "prompt": "verify" },
+
+  { "id": "synth", "depends_on": ["sec_v", "perf_v"], "schema": null,
+    "prompt": "Merge these verified findings into one report.\nSecurity:\n{{steps.sec_v.output}}\nPerf:\n{{steps.perf_v.output}}" }
+]'
+```
+
+`sec_v` starts the moment `sec` resolves, while `perf` is still finding; only `synth` waits for both — the
+barrier-free win, inline. The annotated version with its gotchas (a `verify` step's `findings_from` must also be
+in its `depends_on`; its `output` is the surviving-findings array) and the `script` equivalent
+(find → dedup-vs-seen → verify → synthesize) are in `references/cookbook.md` §1–2.
 
 ## Write worker prompts that return evidence
 
@@ -116,7 +164,7 @@ shape every prompt:
   satisfies the schema. By default a worker returns the `WORKER_SCHEMA` shape (`summary`, `findings[]`,
   `recommended_actions[]`, `risks[]`, `verification[]`, `confidence`); pass a custom `schema` to force a shape
   tuned to your task (worked example: `references/cookbook.md` §4), or `schema: null` for raw text.
-- **Cross-stage context must be passed explicitly** — via `{{steps.<id>.output}}` tokens in a `pipeline`, or via
+- **Cross-stage context must be passed explicitly** — via `{{steps.<id>.output}}` tokens in a `dag`, or via
   the prompt string you build in a `script`. A worker knows only what its prompt contains.
 
 Demand concrete evidence — "cite `file:line`", "name the failing command", "quote the offending code" — over
@@ -129,19 +177,25 @@ These are building blocks, **not a closed menu** — invent novel harnesses (tou
 loop, staged escalation) when a task doesn't fit. Depth and caveats: `references/quality-patterns.md`. Runnable,
 code-verified versions: `references/cookbook.md`.
 
-- **Adversarial verify** — a finding must survive N skeptics prompted to refute it (majority refutes kill it)
-  before you act or report. The default verification pass. → cookbook §1–2
+- **Adversarial verify** — a finding must survive N skeptics prompted to refute it before you act or report; a
+  strict majority of the *valid* refute votes kills it (an even split survives, and a finding whose skeptics all
+  fail returns no valid verdict and is dropped — so a thin survivor set is suspect: check `events[]` for skeptic
+  failures). The default verification pass. It costs skeptics × findings workers (3 × 40 = 120), so dedup and
+  triage *before* you verify — verify findings, not raw noise. → cookbook §1–2
 - **Perspective-diverse verify** — give each skeptic a distinct `lens` (correctness/security/reproducibility),
   not N identical reviewers.
-- **Judge panel** — N attempts from different framings → blind parallel judges → synthesize the winner. No
-  judge primitive; you pick the winner in the parent.
-- **Loop-until-dry** — keep spawning finders until K consecutive dry rounds. *You* own cross-round dedup
-  (`loopUntilDry` feeds nothing forward). → cookbook §2–3
+- **Judge panel** — N attempts from different framings → blind parallel judges → synthesize from the winner,
+  grafting the best ideas from the runners-up. Unlike adversarial verify there's no built-in judge primitive —
+  run the judges as blind workers and pick the winner yourself in the parent.
+- **Loop-until-dry** — keep spawning finders until K consecutive dry rounds. *You* own cross-round dedup:
+  `loopUntilDry` feeds nothing forward, so re-finds never count as dry — for a no-repeat sweep, hand-roll a
+  `while` loop holding a `seen` set injected into each round's prompt. → cookbook §2–3
 - **Multi-modal sweep** — parallel finders, each searching a different way (by-module/symbol/test/recent), blind
   to each other.
 - **Completeness critic** — a final "what's missing?" worker whose output becomes the next round of work.
-- **Loop-until-budget** — gate depth on `budget.remaining()`; the `budget.total &&` guard is mandatory (it's
-  `Infinity` when unbudgeted).
+- **Loop-until-budget** — gate depth on `budget.remaining()`, wrapping the loop condition in `budget.total && …`:
+  `remaining()` is `Infinity` when `--budget-tokens` is unset (and `budget.total` is then `null`), so an
+  unguarded loop runs straight to the lifetime agent cap.
 
 **Two traps:** dedup against everything *seen*, not against what *survived* (or a find→verify loop never
 converges); and **no silent caps** — log/surface every drop, cap, and truncation (`--progress` / `status`).

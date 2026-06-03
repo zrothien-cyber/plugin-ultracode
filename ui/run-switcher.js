@@ -18,8 +18,8 @@ export function RunSwitcher({ runs, activeId, onSelect }) {
   if (!Array.isArray(runs) || runs.length <= 1) return null;
   return h(
     "nav",
-    { className: "run-switcher", "aria-label": "Recent Ultracode runs" },
-    h("span", { className: "run-switcher-label" }, "Recent"),
+    { className: "run-switcher", "aria-label": "Ultracode runs" },
+    h("span", { className: "run-switcher-label" }, "Runs"),
     runs.slice(0, 5).map((run) =>
       h(
         "button",

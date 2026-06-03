@@ -142,10 +142,10 @@ test("CLI run launches the dashboard by default and --no-ui disables it", async 
   let serverPid = null;
   try {
     const workersSpec = JSON.stringify([{ label: "cli-ui", prompt: "cli ui smoke", schema: null }]);
-    const env = { ...process.env, CODEX_HOME: home, CODEX_CLI_PATH: MOCK };
+    const env = { ...process.env, CODEX_HOME: home, CODEX_CLI_PATH: MOCK, ULTRACODE_NO_AUTO_UPDATE: "1" };
     const enabled = childProcess.spawnSync(
       process.execPath,
-      [CLI, "run", "--workers-spec", workersSpec, "--cwd", home, "--codex-bin", MOCK, "--codex-home", home],
+      [CLI, "--workers-spec", workersSpec, "--cwd", home, "--codex-bin", MOCK, "--codex-home", home],
       { env, encoding: "utf8" }
     );
     assert.strictEqual(enabled.status, 0, enabled.stderr);
@@ -156,7 +156,7 @@ test("CLI run launches the dashboard by default and --no-ui disables it", async 
 
     const disabled = childProcess.spawnSync(
       process.execPath,
-      [CLI, "run", "--workers-spec", workersSpec, "--cwd", home, "--codex-bin", MOCK, "--codex-home", home, "--no-ui"],
+      [CLI, "--workers-spec", workersSpec, "--cwd", home, "--codex-bin", MOCK, "--codex-home", home, "--no-ui"],
       { env, encoding: "utf8" }
     );
     assert.strictEqual(disabled.status, 0, disabled.stderr);

@@ -100,6 +100,19 @@ export function outputText(worker) {
   return "";
 }
 
+export function agentDisplayCode(worker, index = 0) {
+  if (!worker) return "WF";
+  const phase = String(worker.phase || "WK")
+    .replace(/[^A-Za-z0-9 ]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+  return `${phase || "WK"}-${String((worker.index ?? index) + 1).padStart(2, "0")}`;
+}
+
 export function fullOutputText(worker) {
   if (!worker) return "";
   if (worker.error) return worker.error;

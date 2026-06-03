@@ -12,7 +12,7 @@ const CLI = path.join(__dirname, "..", "scripts", "ultracode-cli.js");
 function runCli(args, env = {}) {
   return new Promise((resolve) => {
     const child = childProcess.spawn(process.execPath, [CLI, ...args], {
-      env: { ...process.env, ULTRACODE_UI: "0", ...env },
+      env: { ...process.env, ULTRACODE_UI: "0", ULTRACODE_NO_AUTO_UPDATE: "1", ...env },
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
@@ -27,14 +27,14 @@ function runCli(args, env = {}) {
   });
 }
 
-test("CLI pipeline --steps parses JSON, runs the DAG, prints the record", async () => {
+test("CLI --steps parses JSON, runs the DAG, prints the record", async () => {
   const home = freshTmpDir("ultracode-cli-home-");
   const steps = JSON.stringify([
     { id: "a", prompt: "step a" },
     { id: "b", prompt: "step b using {{steps.a.summary}}", depends_on: ["a"] }
   ]);
   const { code, stdout, stderr } = await runCli(
-    ["pipeline", "--steps", steps, "--name", "Plan UI Orb", "--cwd", home, "--codex-bin", MOCK, "--codex-home", home, "--concurrency", "2", "--progress"],
+    ["--steps", steps, "--name", "Plan UI Orb", "--cwd", home, "--codex-bin", MOCK, "--codex-home", home, "--concurrency", "2", "--progress"],
     { CODEX_HOME: home, CODEX_CLI_PATH: MOCK }
   );
   assert.strictEqual(code, 0, `cli exited 0 (stderr: ${stderr})`);
@@ -49,14 +49,25 @@ test("CLI pipeline --steps parses JSON, runs the DAG, prints the record", async 
   assert.match(stderr, /\[ultracode\]/, "progress lines emitted to stderr");
 });
 
-test("CLI pipeline with malformed --steps reports a clean JSON error", async () => {
-  const { code, stderr } = await runCli(["pipeline", "--steps", "{not json"], {});
-  assert.notStrictEqual(code, 0, "non-zero exit on bad JSON");
-  assert.match(stderr, /--steps must be valid JSON/);
+test("CLI positional steps[] JSON auto-compiles to a DAG (pipeline record)", async () => {
+  const home = freshTmpDir("ultracode-cli-home-");
+  const steps = JSON.stringify([
+    { id: "a", prompt: "step a" },
+    { id: "b", prompt: "step b using {{steps.a.summary}}", depends_on: ["a"] }
+  ]);
+  const { code, stdout, stderr } = await runCli(
+    [steps, "--cwd", home, "--codex-bin", MOCK, "--codex-home", home],
+    { CODEX_HOME: home, CODEX_CLI_PATH: MOCK }
+  );
+  assert.strictEqual(code, 0, `cli exited 0 (stderr: ${stderr})`);
+  const record = JSON.parse(stdout);
+  assert.strictEqual(record.options.pipeline, true, "a bare steps[] array routes to runPipelineSpec");
+  assert.strictEqual(record.workers.length, 2);
+  assert.strictEqual(record.status, "completed");
 });
 
-test("CLI rejects an unknown command with the updated plan|run|pipeline|resume|status hint", async () => {
-  const { code, stderr } = await runCli(["frobnicate"], {});
-  assert.notStrictEqual(code, 0);
-  assert.match(stderr, /plan\|run\|pipeline\|resume\|status/);
+test("CLI with malformed --steps reports a clean JSON error", async () => {
+  const { code, stderr } = await runCli(["--steps", "{not json"], {});
+  assert.notStrictEqual(code, 0, "non-zero exit on bad JSON");
+  assert.match(stderr, /--steps must be valid JSON/);
 });

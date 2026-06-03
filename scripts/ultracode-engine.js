@@ -2726,6 +2726,49 @@ function stepFailureRecord(step, error) {
 
 // Compile a declarative steps[] DAG and run it barrier-free, producing the same
 // journaled workflow record shape as runExplicitWorkflow.
+// Barrier-free topological scheduling, shared by runPipelineSpec and the
+// script-scope dag() helper. stepPromise[id] resolves once the step executes,
+// and a step's body only starts after Promise.all(its deps); the shared
+// ctx/limiter keeps total concurrency globally bounded across branches. The
+// resolved value is a Map(id -> { output }); `onStepRecord(step, record)`
+// (optional) fires as each step settles so a caller can journal it.
+async function runDagOnCtx(compiled, ctx, opts = {}) {
+  const { codexBin, codexHomeValue, retryWorker, transport, transportStrict, onStepRecord } = opts;
+  const results = new Map(); // id -> { output }
+  const stepPromise = new Map();
+  for (const step of compiled) {
+    const depPromises = step.depends_on.map((dep) => stepPromise.get(dep));
+    const promise = Promise.all(depPromises).then(async () => {
+      emitEvent(ctx, { type: "step.started", label: step.label, phase: step.phase, kind: step.kind });
+      const startedAt = Date.now();
+      let record;
+      try {
+        const execution = await executeStep(step, results, ctx, codexBin, codexHomeValue, retryWorker, {
+          transport,
+          transportStrict
+        });
+        results.set(step.id, { output: execution.output });
+        record = stepRecordFromExecution(step, execution, Date.now() - startedAt);
+      } catch (error) {
+        // A render/validation error inside a step (e.g. unresolved token) drops
+        // just this step; dependents that referenced it will then also fail.
+        log(ctx, `pipeline: step "${step.id}" failed: ${error instanceof Error ? error.message : error}`, {
+          step_id: step.id,
+          reason: "step-error"
+        });
+        record = stepFailureRecord(step, error);
+        results.set(step.id, { output: undefined });
+      }
+      emitEvent(ctx, { type: "step.completed", label: step.label, phase: step.phase, status: record.status });
+      if (typeof onStepRecord === "function") onStepRecord(step, record);
+      return record;
+    });
+    stepPromise.set(step.id, promise);
+  }
+  await Promise.all(Array.from(stepPromise.values()));
+  return results;
+}
+
 async function runPipelineSpec(input = {}) {
   const cwd = path.resolve(input.cwd || process.cwd());
   const baseSandbox = input.sandbox || "read-only";
@@ -2834,43 +2877,20 @@ async function runPipelineSpec(input = {}) {
   await attachWorkflowUi(workflow, ctx, input);
   if (workflow.ui) persister.schedule();
 
-  // Barrier-free topological scheduling: stepPromise[id] resolves once the step
-  // executes, and a step's body only starts after Promise.all(its deps). The
-  // shared ctx/limiter keeps total concurrency globally bounded across branches.
-  const results = new Map(); // id -> { output }
-  const stepPromise = new Map();
-  for (const step of compiled) {
-    const depPromises = step.depends_on.map((dep) => stepPromise.get(dep));
-    const promise = Promise.all(depPromises).then(async () => {
-      emitEvent(ctx, { type: "step.started", label: step.label, phase: step.phase, kind: step.kind });
-      const startedAt = Date.now();
-      let record;
-      try {
-        const execution = await executeStep(step, results, ctx, codexBin, codexHomeValue, retryOpts.worker, {
-          transport,
-          transportStrict
-        });
-        results.set(step.id, { output: execution.output });
-        record = stepRecordFromExecution(step, execution, Date.now() - startedAt);
-      } catch (error) {
-        // A render/validation error inside a step (e.g. unresolved token) drops
-        // just this step; dependents that referenced it will then also fail.
-        log(ctx, `pipeline: step "${step.id}" failed: ${error instanceof Error ? error.message : error}`, {
-          step_id: step.id,
-          reason: "step-error"
-        });
-        record = stepFailureRecord(step, error);
-        results.set(step.id, { output: undefined });
-      }
+  // Barrier-free topological scheduling, shared with the script-scope dag()
+  // helper via runDagOnCtx. Each step record is journaled into workflow.workers
+  // as it settles.
+  await runDagOnCtx(compiled, ctx, {
+    codexBin,
+    codexHomeValue,
+    retryWorker: retryOpts.worker,
+    transport,
+    transportStrict,
+    onStepRecord(step, record) {
       workflow.workers[indexById.get(step.id)] = record;
-      emitEvent(ctx, { type: "step.completed", label: step.label, phase: step.phase, status: record.status });
       persister.schedule();
-      return record;
-    });
-    stepPromise.set(step.id, promise);
-  }
-
-  await Promise.all(Array.from(stepPromise.values()));
+    }
+  });
   finalizeRecord(workflow, ctx);
   persister.schedule();
   await persister.flush();
@@ -2886,8 +2906,15 @@ module.exports = {
   planWorkflow,
   runWorkflow,
   runPipelineSpec,
+  runDagOnCtx,
   resumeWorkflow,
   workerRecordFromResult,
+  // Role/spec helpers surfaced so the script-scope fanout() helper reuses the
+  // exact fixed-role prompts and workers_spec validation the engine uses.
+  WORKER_ROLES,
+  selectRoles,
+  workerPrompt,
+  normalizeSpec,
   // Convenience re-export of the opt-in script runner. This is a LAZY wrapper:
   // the runner top-level-requires this engine, so the engine must NOT top-level
   // require the runner (that would form a require cycle and hand the runner a

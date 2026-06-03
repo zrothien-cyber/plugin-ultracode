@@ -118,7 +118,7 @@ export function WorkflowLibrary({ record, onRunStarted, onError }) {
       const saved = await postJson("/api/workflow-definitions", { workflow_id: record.id, name: name.trim(), scope: saveScope });
       await loadDefinitions(saved.workflow.id);
       await loadDetail(saved.workflow.id);
-      setMessage("Saved");
+      setMessage(`Saved "${saved.workflow.name || saved.workflow.id}"`);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -133,7 +133,7 @@ export function WorkflowLibrary({ record, onRunStarted, onError }) {
       await putJson(`/api/workflow-definitions/${encodeURIComponent(detail.id)}`, { source: sourceDraft });
       await loadDefinitions(detail.id);
       await loadDetail(detail.id);
-      setMessage("Saved");
+      setMessage("Workflow source saved");
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -149,7 +149,7 @@ export function WorkflowLibrary({ record, onRunStarted, onError }) {
       await deleteJson(`/api/workflow-definitions/${encodeURIComponent(detail.id)}`);
       const nextId = await loadDefinitions("");
       await loadDetail(nextId);
-      setMessage("Deleted");
+      setMessage("Workflow deleted");
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -162,7 +162,7 @@ export function WorkflowLibrary({ record, onRunStarted, onError }) {
     setBusy("run");
     try {
       const launched = await postJson(`/api/workflow-definitions/${encodeURIComponent(detail.id)}/run`, { args: parseArgs(argsDraft) });
-      setMessage("Started");
+      setMessage("Run started");
       if (typeof onRunStarted === "function") onRunStarted(launched.workflow_id);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
@@ -195,7 +195,12 @@ export function WorkflowLibrary({ record, onRunStarted, onError }) {
             "div",
             { className: "workflow-library-actions" },
             record && record.kind === "script" && record.script_path
-              ? h("button", { className: "icon-button", type: "button", onClick: saveCurrentRun, disabled: Boolean(busy), title: "Save current run", "aria-label": "Save current run" }, h(Save, { size: 17 }))
+              ? h(
+                  "button",
+                  { className: "workflow-action-button", type: "button", onClick: saveCurrentRun, disabled: Boolean(busy), title: "Save current run" },
+                  h(Save, { size: 17 }),
+                  h("span", null, "Save run")
+                )
               : null,
             h(
               "select",
@@ -258,21 +263,29 @@ export function WorkflowLibrary({ record, onRunStarted, onError }) {
                         h("span", null, detail.unsupported.join(" "))
                       )
                     : h("div", { className: "workflow-definition-ok", key: "ok" }, h(CheckCircle2, { size: 16 }), h("span", null, "Compatible")),
-                  h("textarea", {
-                    key: "source",
-                    className: "workflow-source-editor",
-                    spellCheck: "false",
-                    value: sourceDraft,
-                    onChange: (event) => setSourceDraft(event.target.value)
-                  }),
-                  h("textarea", {
-                    key: "args",
-                    className: "workflow-args-editor",
-                    spellCheck: "false",
-                    placeholder: "args JSON",
-                    value: argsDraft,
-                    onChange: (event) => setArgsDraft(event.target.value)
-                  }),
+                  h(
+                    "label",
+                    { className: "workflow-editor-section", key: "source" },
+                    h("span", null, "Workflow source"),
+                    h("textarea", {
+                      className: "workflow-source-editor",
+                      spellCheck: "false",
+                      value: sourceDraft,
+                      onChange: (event) => setSourceDraft(event.target.value)
+                    })
+                  ),
+                  h(
+                    "label",
+                    { className: "workflow-editor-section compact", key: "args" },
+                    h("span", null, "Run args JSON"),
+                    h("textarea", {
+                      className: "workflow-args-editor",
+                      spellCheck: "false",
+                      placeholder: "{\"topic\":\"release readiness\"}",
+                      value: argsDraft,
+                      onChange: (event) => setArgsDraft(event.target.value)
+                    })
+                  ),
                   message ? h("div", { className: "workflow-library-message", key: "message" }, message) : null
                 ]
               : h("div", { className: "workflow-library-empty" }, "Select a workflow")

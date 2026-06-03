@@ -12,7 +12,7 @@ const CLI = path.join(__dirname, "..", "scripts", "ultracode-cli.js");
 
 function spawnCli(args, env = {}) {
   return childProcess.spawn(process.execPath, [CLI, ...args], {
-    env: { ...process.env, ULTRACODE_UI: "0", ...env },
+    env: { ...process.env, ULTRACODE_UI: "0", ULTRACODE_NO_AUTO_UPDATE: "1", ...env },
     stdio: ["ignore", "pipe", "pipe"]
   });
 }
@@ -84,7 +84,6 @@ test("CLI run: first SIGINT cancels, prints notice, exits 0 with a persisted can
   ]);
   const child = spawnCli(
     [
-      "run",
       "--workers-spec",
       workers_spec,
       "--cwd",
@@ -127,7 +126,6 @@ test("CLI run: a second SIGINT forces exit 130", async () => {
   const workers_spec = JSON.stringify([{ prompt: "very slow", schema: null }]);
   const child = spawnCli(
     [
-      "run",
       "--workers-spec",
       workers_spec,
       "--cwd",
@@ -161,10 +159,10 @@ test("CLI run: a second SIGINT forces exit 130", async () => {
   assert.match(stderr, /force quit/i);
 });
 
-test("CLI plan does NOT install the SIGINT handler (unaffected by Ctrl-C wiring)", async () => {
-  // plan is synchronous and returns immediately; just assert it works and prints.
-  const { code, stdout } = await collect(spawnCli(["plan", "--task", "hello", "--workers", "2"], {}));
+test("CLI workflow list does NOT install the SIGINT handler (unaffected by Ctrl-C wiring)", async () => {
+  // workflow list is synchronous and returns immediately; just assert it works and prints.
+  const { code, stdout } = await collect(spawnCli(["workflow", "list"], {}));
   assert.strictEqual(code, 0);
-  const plan = JSON.parse(stdout);
-  assert.strictEqual(plan.workers.length, 2);
+  const result = JSON.parse(stdout);
+  assert.strictEqual(result.kind, "workflow_definitions");
 });

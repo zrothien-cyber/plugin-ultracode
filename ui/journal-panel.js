@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, CircleSlash, Clock3, Database, FileText, Shield } from "./icons.js";
-import { compactText, formatDate, fullOutputText, fullText, outputText } from "./state.js";
+import { agentDisplayCode, compactText, formatDate, fullOutputText, fullText, outputText } from "./state.js";
 import { OutputViewer } from "./output-viewer.js";
 
 const React = window.React;
@@ -45,19 +45,6 @@ function statusForEvent(event, worker) {
   if (event.type === "worker.cancelled" || event.type === "cancelled") return "cancelled";
   if (event.type === "worker.started" || event.type === "step.started") return "running";
   return "pending";
-}
-
-function agentCode(worker, index) {
-  if (!worker) return "WF";
-  const phase = String(worker.phase || "WK")
-    .replace(/[^A-Za-z0-9 ]+/g, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-  return `${phase || "WK"}-${String((worker.index ?? index) + 1).padStart(2, "0")}`;
 }
 
 function outputSummary(event, worker, status) {
@@ -110,7 +97,7 @@ function EventDetails({ event, worker, status }) {
 function EventRow({ event, nodes, index, expanded, onToggle, onSelectWorker }) {
   const worker = workerForEvent(event, nodes);
   const status = statusForEvent(event, worker);
-  const code = agentCode(worker, index);
+  const code = agentDisplayCode(worker, index);
   const message = compactText(event.message || event.label || event.type || "", 120);
   return h(
     "article",
@@ -146,7 +133,7 @@ export function JournalPanel({ graph, onSelectWorker }) {
     h(
       "header",
       { className: "journal-heading" },
-      h("div", null, h(FileText, { size: 20 }), h("h2", null, "Journal")),
+      h("div", null, h(FileText, { size: 20 }), h("h2", null, "Events")),
       h("span", { className: "live-indicator" }, h(Shield, { size: 14 }), "Live")
     ),
     h(

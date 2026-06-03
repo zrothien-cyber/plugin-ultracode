@@ -7,7 +7,7 @@
 //
 // Run it for free against the mock codex:
 //   CODEX_CLI_PATH=test/fixtures/mock-codex.js \
-//   node scripts/ultracode-cli.js script examples/budget-loop.workflow.js \
+//   node scripts/ultracode-cli.js examples/budget-loop.workflow.js \
 //     --budget-tokens 5000 --max-agents 6 --concurrency 2
 //
 // WARNING: a script runs arbitrary Node.js in-process with full host

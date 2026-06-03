@@ -20,12 +20,83 @@ const RUNNING_EFFECTS = ["mesh", "dot-points"];
 const ERROR_EFFECTS = ["error-mesh", "fire"];
 
 const STATUS_ORB_STYLES = {
-  completed: { color: 0x31c978, roughness: 0.54, metalness: 0.1, emissive: 0x0f6b3b, emissiveIntensity: 0.2, opacity: 1 },
+  completed: { color: 0x58645d, roughness: 0.62, metalness: 0.14, emissive: 0x0d2d1d, emissiveIntensity: 0.12, opacity: 1 },
   failed: { color: 0x7d302b, roughness: 0.6, metalness: 0.14, emissive: 0x4b0d0a, emissiveIntensity: 0.2, opacity: 1 },
   running: { color: 0x315f8f, roughness: 0.62, metalness: 0.14, emissive: 0x0f2f59, emissiveIntensity: 0.16, opacity: 1 },
   cancelled: { color: 0x555a58, roughness: 0.76, metalness: 0.08, emissive: 0x111111, emissiveIntensity: 0.06, opacity: 1 },
   pending: { color: 0x50504e, roughness: 0.7, metalness: 0.18, emissive: 0x111111, emissiveIntensity: 0.08, opacity: 1 }
 };
+
+const STATUS_AURA_STYLES = {
+  completed: { colorA: 0x31f58c, colorB: 0x93ffd1, intensity: 0.7 },
+  failed: { colorA: 0xff5a50, colorB: 0xffb199, intensity: 0.74 },
+  running: { colorA: 0x60a5fa, colorB: 0xb7d7ff, intensity: 0.72 },
+  pending: { colorA: 0xf5b83f, colorB: 0xffdf8f, intensity: 0.58 },
+  cancelled: { colorA: 0x8c8c87, colorB: 0xd2d2ca, intensity: 0.42 }
+};
+
+function createStatusAura() {
+  const uniforms = {
+    uTime: { value: 0 },
+    uIntensity: { value: 0 },
+    uColorA: { value: new THREE.Color(0x31f58c) },
+    uColorB: { value: new THREE.Color(0x93ffd1) }
+  };
+  const material = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: `
+      varying vec3 vPosition;
+      varying vec3 vNormal;
+
+      void main() {
+        vPosition = position;
+        vNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      precision highp float;
+
+      uniform float uTime;
+      uniform float uIntensity;
+      uniform vec3 uColorA;
+      uniform vec3 uColorB;
+      varying vec3 vPosition;
+      varying vec3 vNormal;
+
+      void main() {
+        float rim = pow(1.0 - max(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)), 0.0), 1.85);
+        float ribbon = 0.5 + 0.5 * sin(vPosition.y * 10.0 + vPosition.x * 4.0 + uTime * 1.4);
+        float shimmer = 0.5 + 0.5 * sin((vPosition.x - vPosition.y) * 16.0 - uTime * 2.1);
+        float band = smoothstep(0.58, 1.0, ribbon) * 0.34 + smoothstep(0.72, 1.0, shimmer) * 0.16;
+        float alpha = (rim * 0.74 + band * rim * 0.62) * uIntensity;
+        vec3 color = mix(uColorA, uColorB, ribbon) * (0.72 + rim * 0.6);
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    polygonOffset: true,
+    polygonOffsetFactor: -4
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1.026, 96, 64), material);
+  mesh.renderOrder = 6;
+  mesh.visible = false;
+  return {
+    mesh,
+    setStatus(status) {
+      const style = STATUS_AURA_STYLES[status] || STATUS_AURA_STYLES.pending;
+      mesh.visible = Boolean(style);
+      uniforms.uColorA.value.setHex(style.colorA);
+      uniforms.uColorB.value.setHex(style.colorB);
+      uniforms.uIntensity.value = style.intensity;
+    },
+    update(elapsed) {
+      uniforms.uTime.value = elapsed;
+    }
+  };
+}
 
 function telemetryFrom(record, graph) {
   const counts = graph?.counts || {};
@@ -89,6 +160,8 @@ function createOrbScene(host, initialTelemetry) {
   });
   const orb = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), orbMaterial);
   root.add(orb);
+  const statusAura = createStatusAura();
+  root.add(statusAura.mesh);
 
   const pointer = { x: 0, y: 0 };
   const look = { x: 0, y: 0 };
@@ -133,10 +206,12 @@ function createOrbScene(host, initialTelemetry) {
     orbMaterial.transparent = style.opacity < 1;
     orbMaterial.depthWrite = style.opacity >= 0.95;
     orbMaterial.needsUpdate = true;
+    statusAura.setStatus(status);
   }
 
   function applyVisual(effectId, mood, elapsed, ttl = 2.8) {
     const active = effectManager.setActive(effectId);
+    statusAura.setStatus("pending");
     setHostEffect(effectId);
     face.setFaceStyle(active.faceStyle);
     face.setMood(mood);
@@ -236,6 +311,7 @@ function createOrbScene(host, initialTelemetry) {
     settle(elapsed);
     effectManager.update(elapsed);
     if (effectManager.activeId === "neutral") applyStatusOrbStyle(state.telemetry.status);
+    statusAura.update(elapsed);
     face.update(elapsed, look);
     renderer.render(scene, camera);
     if (!reducedMotion) frame = window.requestAnimationFrame(render);
