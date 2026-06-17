@@ -11,6 +11,11 @@ const util = require("util");
 
 const appServerClient = require("./app-server-client");
 const { workflowIdentity } = require("./run-identity");
+const {
+  controllerSnapshot,
+  refreshControllerHeartbeat,
+  reconcileRunningRecord
+} = require("./run-lifecycle");
 const { attachWorkflowUi, shouldLaunchUi } = require("./ultracode-ui-launcher");
 
 const execFileP = util.promisify(childProcess.execFile);
@@ -229,7 +234,9 @@ function planWorkflow(input = {}) {
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.rename(tmpPath, filePath);
 }
 
 async function readJson(filePath) {
@@ -265,7 +272,12 @@ async function readWorkflow(input = {}) {
   if (!filePath) {
     return { status: "missing", message: "No Ultracode workflow state exists yet." };
   }
-  return readJson(filePath);
+  const record = await readJson(filePath);
+  const reconciled = reconcileRunningRecord(record);
+  if (reconciled.changed) {
+    await writeJson(filePath, reconciled.record);
+  }
+  return reconciled.record;
 }
 
 // ---------------------------------------------------------------------------
@@ -1910,6 +1922,7 @@ function makePersister(record, ctx) {
       // Snapshot the record at schedule time so each queued write captures the
       // progress as of when it was scheduled, rather than all writes racing to
       // serialize the same live (eventually final) object reference.
+      refreshControllerHeartbeat(record);
       const snapshot = JSON.parse(JSON.stringify(record));
       chain = chain
         .then(() => writeJson(record.state_path, snapshot))
@@ -2087,6 +2100,7 @@ async function runExplicitWorkflow(input) {
     cwd,
     started_at: now,
     completed_at: null,
+    controller: controllerSnapshot(now),
     options: {
       workers: specs.length,
       sandbox: baseSandbox,
@@ -2201,6 +2215,7 @@ async function runWorkflow(input = {}) {
     cwd: options.cwd,
     started_at: now,
     completed_at: null,
+    controller: controllerSnapshot(now),
     options: {
       workers: options.workers,
       sandbox: options.sandbox,
@@ -2919,6 +2934,7 @@ async function runPipelineSpec(input = {}) {
     cwd,
     started_at: now,
     completed_at: null,
+    controller: controllerSnapshot(now),
     options: {
       workers: compiled.length,
       sandbox: baseSandbox,
@@ -3031,6 +3047,9 @@ module.exports = {
     injectSchemaIntoPrompt,
     resolveTransport,
     normalizeAppServerUsage,
-    transportJournal
+    transportJournal,
+    controllerSnapshot,
+    refreshControllerHeartbeat,
+    reconcileRunningRecord
   }
 };

@@ -363,6 +363,7 @@ test("journaling: record shape + state file readable by readWorkflow (by id and 
     });
     assert.strictEqual(rec.kind, "script");
     assert.strictEqual(rec.status, "completed");
+    assert.strictEqual(rec.controller.pid, process.pid);
     for (const k of ["id", "started_at", "completed_at", "duration_ms", "cwd", "options", "state_path", "result", "events", "aggregate_usage"]) {
       assert.ok(Object.prototype.hasOwnProperty.call(rec, k), `record has ${k}`);
     }

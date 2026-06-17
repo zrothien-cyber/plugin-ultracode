@@ -150,9 +150,10 @@ test("ui workflow persists worker starts before first completion", async () => {
           serverPid = parsed.ui && parsed.ui.server_pid;
           const events = Array.isArray(parsed.events) ? parsed.events : [];
           const workers = Array.isArray(parsed.workers) ? parsed.workers : [];
+          const startedCount = events.filter((event) => event.type === "worker.started").length;
           if (
             parsed.status === "running" &&
-            events.some((event) => event.type === "worker.started") &&
+            startedCount === 2 &&
             workers.some((worker) => worker.status === "running") &&
             workers.every((worker) => worker.status !== "completed")
           ) {
@@ -203,6 +204,53 @@ test("partial status: exactly one of two workers fails => status 'partial'", asy
     const completed = wf.workers.filter((w) => w.status === "completed");
     assert.strictEqual(failed.length, 1, "exactly one worker failed");
     assert.strictEqual(completed.length, 1, "exactly one worker completed");
+  });
+});
+
+test("readWorkflow marks running records abandoned when recorded controller is gone", async () => {
+  await withCodexHome(async () => {
+    const id = "stale-controller-test";
+    const statePath = engine.statePathFor(id);
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify(
+        {
+          id,
+          status: "running",
+          started_at: startedAt,
+          completed_at: null,
+          controller: {
+            pid: 2147483647,
+            started_at: startedAt,
+            heartbeat_at: startedAt,
+            platform: process.platform
+          },
+          state_path: statePath,
+          workers: [
+            { id: "pending", status: "pending" },
+            { id: "running", status: "running" },
+            { id: "completed", status: "completed" }
+          ],
+          events: [],
+          aggregate_usage: engine.sumUsageFromWorkers([])
+        },
+        null,
+        2
+      )
+    );
+
+    const observed = await readWorkflow({ workflow_id: id });
+    assert.strictEqual(observed.status, "abandoned");
+    assert.strictEqual(observed.observed_status, "abandoned");
+    assert.match(observed.abandoned_reason, /controller pid 2147483647 is not live/);
+    assert.strictEqual(observed.workers[0].status, "abandoned");
+    assert.strictEqual(observed.workers[1].status, "abandoned");
+    assert.strictEqual(observed.workers[2].status, "completed");
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.strictEqual(persisted.status, "abandoned", "status reconciliation is persisted for dashboards");
   });
 });
 

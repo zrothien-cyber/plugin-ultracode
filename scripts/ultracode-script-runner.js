@@ -51,7 +51,9 @@ const engine = require("./ultracode-engine");
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.rename(tmpPath, filePath);
 }
 
 async function writeText(filePath, value) {
@@ -86,6 +88,7 @@ function makeScriptPersister(record, ctx) {
   let chain = Promise.resolve();
   return {
     schedule() {
+      engine._internal.refreshControllerHeartbeat(record);
       const snapshot = JSON.parse(JSON.stringify(record));
       chain = chain
         .then(() => writeJson(record.state_path, snapshot))
@@ -650,6 +653,7 @@ async function runScript(input = {}) {
     started_at: startedAt,
     completed_at: null,
     duration_ms: 0,
+    controller: engine._internal.controllerSnapshot(startedAt),
     cwd,
     options: {
       concurrency: ctx.concurrency,
