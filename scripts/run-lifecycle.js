@@ -1,12 +1,22 @@
 "use strict";
 
+const {
+  currentProcessIdentity,
+  isLivePid,
+  lookupProcessIdentity,
+  sameCommandLine,
+  sameStartTime
+} = require("./process-liveness");
+
 function nowIso() {
   return new Date().toISOString();
 }
 
 function controllerSnapshot(startedAt) {
   const now = nowIso();
+  const identity = currentProcessIdentity(startedAt || now);
   return {
+    ...identity,
     pid: process.pid,
     started_at: startedAt || now,
     heartbeat_at: now,
@@ -18,17 +28,6 @@ function refreshControllerHeartbeat(record) {
   if (!record || !record.controller || record.status !== "running") return record;
   record.controller.heartbeat_at = nowIso();
   return record;
-}
-
-function isLivePid(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if (error && error.code === "EPERM") return true;
-    return false;
-  }
 }
 
 function markWorkerAbandoned(worker) {
@@ -56,18 +55,54 @@ function markAbandoned(record, reason, observedAt) {
   return next;
 }
 
-function reconcileRunningRecord(record) {
+function evaluateControllerLiveness(controller, options = {}) {
+  if (!controller || !Number.isInteger(controller.pid)) {
+    return { live: null, reason: "controller pid was not journaled" };
+  }
+  const platform = controller.platform || process.platform;
+  const lookup = options.lookupProcessIdentity || lookupProcessIdentity;
+  const observed = lookup(controller.pid, platform);
+  if (!observed || observed.exists === false) {
+    return {
+      live: false,
+      reason: `controller pid ${controller.pid} is not live; run ended before terminal state was journaled`
+    };
+  }
+
+  if (controller.process_started_at && observed.process_started_at) {
+    if (!sameStartTime(controller.process_started_at, observed.process_started_at)) {
+      return {
+        live: false,
+        reason: `controller pid ${controller.pid} belongs to a different process start time`
+      };
+    }
+  }
+
+  if (controller.command_line && observed.command_line) {
+    if (!sameCommandLine(controller.command_line, observed.command_line, platform)) {
+      return {
+        live: false,
+        reason: `controller pid ${controller.pid} belongs to a different command line`
+      };
+    }
+  }
+
+  return { live: true };
+}
+
+function reconcileRunningRecord(record, options = {}) {
   if (!record || record.status !== "running") return { record, changed: false };
   const controller = record.controller;
   if (!controller || !Number.isInteger(controller.pid)) {
     return { record, changed: false };
   }
-  if (isLivePid(controller.pid)) return { record, changed: false };
+  const liveness = evaluateControllerLiveness(controller, options);
+  if (liveness.live !== false) return { record, changed: false };
   const observedAt = nowIso();
   return {
     record: markAbandoned(
       record,
-      `controller pid ${controller.pid} is not live; run ended before terminal state was journaled`,
+      liveness.reason,
       observedAt
     ),
     changed: true
@@ -76,6 +111,7 @@ function reconcileRunningRecord(record) {
 
 module.exports = {
   controllerSnapshot,
+  evaluateControllerLiveness,
   refreshControllerHeartbeat,
   reconcileRunningRecord,
   isLivePid
