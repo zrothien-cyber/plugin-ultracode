@@ -5,6 +5,7 @@ const fs = require("fs/promises");
 const http = require("http");
 const path = require("path");
 const { displayRunName } = require("./run-identity");
+const { readWorkflow } = require("./ultracode-engine");
 const scriptRunner = require("./ultracode-script-runner");
 const workflowDefinitions = require("./workflow-definitions");
 
@@ -55,7 +56,7 @@ function safeWorkflowId(id) {
 }
 
 async function readWorkflowFile(filePath) {
-  return JSON.parse(await fs.readFile(filePath, "utf8"));
+  return readWorkflow({ state_path: filePath });
 }
 
 async function workflowFiles() {

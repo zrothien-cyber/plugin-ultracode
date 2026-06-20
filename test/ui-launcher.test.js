@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const path = require("path");
 
 const { engine, MOCK, freshTmpDir, withCodexHome } = require("./helpers/env.js");
-const { metadataPathForRunsDir, shouldLaunchUi } = require("../scripts/ultracode-ui-launcher.js");
+const { ensureUiServer, metadataPathForRunsDir, shouldLaunchUi } = require("../scripts/ultracode-ui-launcher.js");
 const { runScript } = require("../scripts/ultracode-script-runner.js");
 
 const CLI = path.join(__dirname, "..", "scripts", "ultracode-cli.js");
@@ -135,6 +135,67 @@ test("runWorkflow ui:true launches the dashboard server and serves the workflow 
       await stopServer(serverPid);
     }
   });
+});
+
+test("dashboard API reconciles stale running workflow records before serving them", async () => {
+  const runsDir = freshTmpDir("ultracode-ui-stale-runs-");
+  let serverPid = null;
+  try {
+    const id = "stale-ui-reconcile";
+    const startedAt = "2026-06-20T00:00:00.000Z";
+    const statePath = path.join(runsDir, `${id}.json`);
+    fs.writeFileSync(
+      statePath,
+      `${JSON.stringify(
+        {
+          id,
+          status: "running",
+          started_at: startedAt,
+          completed_at: null,
+          controller: {
+            pid: 2147483647,
+            started_at: startedAt,
+            heartbeat_at: startedAt,
+            platform: process.platform
+          },
+          state_path: statePath,
+          workers: [
+            { id: "pending", status: "pending" },
+            { id: "running", status: "running" },
+            { id: "completed", status: "completed" }
+          ],
+          events: []
+        },
+        null,
+        2
+      )}\n`
+    );
+
+    const server = await ensureUiServer(runsDir, { ui_port: 0 });
+    serverPid = server.pid;
+
+    const byId = await fetchJson(`${server.url}/api/workflows/${id}`);
+    assert.strictEqual(byId.status, "abandoned");
+    assert.strictEqual(byId.observed_status, "abandoned");
+    assert.match(byId.abandoned_reason, /controller pid 2147483647 is not live/);
+    assert.strictEqual(byId.workers[0].status, "abandoned");
+    assert.strictEqual(byId.workers[1].status, "abandoned");
+    assert.strictEqual(byId.workers[2].status, "completed");
+
+    const latest = await fetchJson(`${server.url}/api/workflows/latest`);
+    assert.strictEqual(latest.id, id);
+    assert.strictEqual(latest.status, "abandoned");
+
+    const list = await fetchJson(`${server.url}/api/workflows`);
+    assert.strictEqual(list.workflows[0].id, id);
+    assert.strictEqual(list.workflows[0].status, "abandoned");
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.strictEqual(persisted.status, "abandoned");
+  } finally {
+    await stopServer(serverPid);
+    fs.rmSync(runsDir, { recursive: true, force: true });
+  }
 });
 
 test("CLI run launches the dashboard by default and --no-ui disables it", async () => {
