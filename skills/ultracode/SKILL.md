@@ -110,10 +110,11 @@ schemas, or no verification.
   20 min) is **not** retried — transient-error retries are opt-in via `max_retries` (default `0`) and never cover
   a timeout — so don't set a tight `timeout_ms` for deep work, and read a thin result set as evidence of failures,
   not of a clean codebase.
-- **Use a Codex goal for complex Ultracode tasks**, prefixing the objective with `Use $ultracode to ...` so
-  every continuation re-triggers this skill. The goal guards against ending after the worker summary but before
-  the work is done: clear it only once the top-level outcome — synthesis, edits, verification — is genuinely
-  settled. (Procedure: README "Pair with Codex goals".)
+- **Always use a Codex goal when Ultracode is invoked**, prefixing the objective with `Use $ultracode to ...` so
+  every continuation re-triggers this skill. This goal is the mechanism that keeps multi-turn Ultracode work on
+  track: it guards against ending after the worker summary but before synthesis, edits, integration, and final
+  verification are genuinely settled. Clear it only once the top-level outcome is done. (Procedure: README "Pair
+  with Codex goals".)
 - **Surface the dashboard.** Leave the run UI on; the moment `ui.ready` fires (or from the final `record.ui.url`)
   open the URL in the Codex in-app browser, else print it as a plain clickable link so the user can watch the run
   live. (Mechanics and flags: `references/cli.md`.)

@@ -108,6 +108,34 @@ test("runWorkflow ui:true launches the dashboard server and serves the workflow 
       assert.strictEqual(health.ok, true);
       assert.strictEqual(health.pid, serverPid);
 
+      const emptyHookSessions = await fetchJson(`${record.ui.server_url}/api/hook-sessions`);
+      assert.deepStrictEqual(emptyHookSessions.sessions, []);
+
+      fs.mkdirSync(path.join(home, "loop", "sessions"), { recursive: true });
+      fs.mkdirSync(path.join(home, "peer", "sessions"), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, "loop", "sessions", "loop-a.json"),
+        JSON.stringify({
+          goal: "ship the loop UI",
+          activated_at: "2026-07-06T01:00:00.000Z",
+          updated_at: "2026-07-06T01:02:00.000Z",
+          continues: 1,
+          reviews: [{ at: "2026-07-06T01:01:00.000Z", kind: "stop", decision: "block", review: "Tests missing.", next_prompt: "Run npm test.", confidence: "high" }]
+        })
+      );
+      fs.writeFileSync(
+        path.join(home, "peer", "sessions", "peer-a.json"),
+        JSON.stringify({
+          updated_at: "2026-07-06T01:03:00.000Z",
+          reviews: [{ at: "2026-07-06T01:03:00.000Z", kind: "prompt", prompt: "review this", amended_prompt: "review this with tests", review: "Added verification.", confidence: "high" }]
+        })
+      );
+      const hookSessions = await fetchJson(`${record.ui.server_url}/api/hook-sessions`);
+      assert.strictEqual(hookSessions.codex_home, home);
+      assert.deepStrictEqual(hookSessions.sessions.map((session) => session.namespace), ["peer", "loop"]);
+      assert.strictEqual(hookSessions.sessions.find((session) => session.namespace === "loop").goal, "ship the loop UI");
+      assert.strictEqual(hookSessions.sessions.find((session) => session.namespace === "peer").reviews[0].amended_prompt, "review this with tests");
+
       const apiRecord = await fetchJson(`${record.ui.server_url}/api/workflows/${record.id}`);
       assert.strictEqual(apiRecord.id, record.id);
       assert.strictEqual(apiRecord.workers.length, 1);

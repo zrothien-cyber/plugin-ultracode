@@ -31,6 +31,7 @@ const metaPath = path.resolve(requiredEnv("ULTRACODE_UI_META_PATH"));
 const host = (process.env.ULTRACODE_UI_HOST || "127.0.0.1").trim();
 const port = Math.max(0, Math.floor(Number(process.env.ULTRACODE_UI_PORT || 0)));
 const idleTimeoutMs = Math.max(60_000, Math.floor(Number(process.env.ULTRACODE_UI_IDLE_TIMEOUT_MS || 30 * 60_000)));
+const HOOK_SESSION_NAMESPACES = ["loop", "peer"];
 let lastRequestAt = Date.now();
 let serverUrl = null;
 
@@ -151,6 +152,86 @@ async function listWorkflows() {
   return records;
 }
 
+function codexHomeForSessions() {
+  if (process.env.CODEX_HOME) return path.resolve(process.env.CODEX_HOME);
+  if (path.basename(runsDir) === "runs" && path.basename(path.dirname(runsDir)) === "ultracode") {
+    return path.dirname(path.dirname(runsDir));
+  }
+  return path.join(process.env.HOME || process.cwd(), ".codex");
+}
+
+function normalizeReview(review) {
+  if (!review || typeof review !== "object") return null;
+  return {
+    at: typeof review.at === "string" ? review.at : null,
+    kind: typeof review.kind === "string" ? review.kind : "review",
+    decision: typeof review.decision === "string" ? review.decision : null,
+    prompt: typeof review.prompt === "string" ? review.prompt : null,
+    amended_prompt: typeof review.amended_prompt === "string" ? review.amended_prompt : null,
+    review: typeof review.review === "string" ? review.review : "",
+    next_prompt: typeof review.next_prompt === "string" ? review.next_prompt : null,
+    confidence: typeof review.confidence === "string" ? review.confidence : null,
+    model: typeof review.model === "string" ? review.model : null,
+    backend: typeof review.backend === "string" ? review.backend : null
+  };
+}
+
+function latestSessionTimestamp(session) {
+  const reviewTimes = (session.reviews || []).map((review) => Date.parse(review.at || "")).filter(Number.isFinite);
+  const candidates = [
+    Date.parse(session.updated_at || ""),
+    Date.parse(session.activated_at || ""),
+    ...reviewTimes
+  ].filter(Number.isFinite);
+  return candidates.length ? Math.max(...candidates) : 0;
+}
+
+async function readHookSessionFile(namespace, filePath) {
+  const raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+  const reviews = Array.isArray(raw.reviews) ? raw.reviews.map(normalizeReview).filter(Boolean).slice(-50) : [];
+  return {
+    id: path.basename(filePath, ".json"),
+    namespace,
+    goal: typeof raw.goal === "string" ? raw.goal : "",
+    activated_at: typeof raw.activated_at === "string" ? raw.activated_at : null,
+    updated_at: typeof raw.updated_at === "string" ? raw.updated_at : null,
+    cwd: typeof raw.cwd === "string" ? raw.cwd : null,
+    continues: Number.isFinite(Number(raw.continues)) ? Number(raw.continues) : null,
+    review_count: reviews.length,
+    reviews,
+    latest_at: null
+  };
+}
+
+async function listHookSessions() {
+  const codex_home = codexHomeForSessions();
+  const sessions = [];
+  for (const namespace of HOOK_SESSION_NAMESPACES) {
+    const dir = path.join(codex_home, namespace, "sessions");
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => path.join(dir, entry.name));
+    for (const file of files) {
+      try {
+        sessions.push(await readHookSessionFile(namespace, file));
+      } catch {
+        sessions.push({ id: path.basename(file, ".json"), namespace, unreadable: true, reviews: [], review_count: 0 });
+      }
+    }
+  }
+  for (const session of sessions) {
+    const timestamp = latestSessionTimestamp(session);
+    session.latest_at = timestamp ? new Date(timestamp).toISOString() : null;
+  }
+  sessions.sort((a, b) => latestSessionTimestamp(b) - latestSessionTimestamp(a));
+  return { codex_home, sessions };
+}
+
 function enrichWorkflow(record) {
   if (!record || typeof record !== "object") return record;
   if (record.display_name) return record;
@@ -205,6 +286,10 @@ async function handle(req, res) {
       return;
     }
     json(res, 200, enrichWorkflow(record));
+    return;
+  }
+  if (pathname === "/api/hook-sessions") {
+    json(res, 200, await listHookSessions());
     return;
   }
   if (pathname === "/api/workflow-definitions") {
