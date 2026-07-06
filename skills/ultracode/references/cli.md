@@ -153,8 +153,8 @@ Each step:
 - `kind`: `worker` (default), `parallel`, `verify`, or `loop`.
 - `prompt` (**required for every kind**): the prompt template. Cross-stage data flows by rendering tokens
   (resolved just before spawn; an unresolved token throws rather than emitting a blank): `{{steps.<id>.output}}`,
-  `{{steps.<id>.output.<path>}}` (drill-in), `{{steps.<id>.summary}}`, `{{round}}` (inside a `loop`), and
-  `{{item.<key>}}` (inside a `parallel`). **A step may only render tokens for ids in its own `depends_on`** (the
+  `{{steps.<id>.output.<path>}}` (drill-in), `{{steps.<id>.summary}}`, `{{round}}`, `{{seen}}`,
+  `{{seen_json}}`, `{{consecutive_dry}}` (inside a `loop`), and `{{item.<key>}}` (inside a `parallel`). **A step may only render tokens for ids in its own `depends_on`** (the
   compiler throws otherwise). Note `verify`/`loop` still *require* a `prompt` even though they don't use it as
   worker text (see below) — pass a token-free placeholder.
 - `schema`: per-step JSON Schema (omit for `WORKER_SCHEMA`; `null` for raw text).
@@ -165,9 +165,9 @@ Each step:
   to vote on — **must also appear in `depends_on`** or the compiler throws), `findings_path` (dot-path into that
   output, default `findings`), `skeptics` (default 3), `lenses`, `context`. The step's own `prompt` is not used
   as worker text; its `output` is the surviving-findings array.
-- `loop`-only (`kind: "loop"`, wraps `loopUntilDry`): `dry_rounds` (default 2), `max_rounds` (default 10);
-  exposes `{{round}}` only — a loop step **cannot** see prior rounds' findings (for cross-round dedup, hand-roll
-  a script `while` loop — see `cookbook.md`).
+- `loop`-only (`kind: "loop"`, wraps `loopUntilDry`): `dry_rounds` (default 2), `max_rounds` (default 10),
+  `dedupe_findings: true` to treat repeat-only `findings` rounds as dry and expose the running memory through
+  `{{seen}}` / `{{seen_json}}`.
 - `parallel`-only (`kind: "parallel"`): `fanout` (int, default 1) **or** `items` (array, each exposed via
   `{{item.<key>}}`).
 
@@ -221,7 +221,9 @@ Bound scope (ctx is auto-injected — never pass it):
   `{{steps.<id>.output}}` edges) on the live script `ctx`; returns an `{ [stepId]: output }` map and journals its
   workers into the script record. **Distinct from `pipeline(items, ...stages)`** (per-item streaming over a list).
 - `loopUntilDry(makePrompt, opts?)`, `adversarialVerify(findings, opts?)` → as above; both inherit the current
-  `phase()` by default inside scripts.
+  `phase()` by default inside scripts. `makePrompt` receives `(round, ctx, state)`; with
+  `dedupeFindings: true`, `state.seenList` is the running finding/source memory and repeat-only rounds count as
+  dry.
 - `log(message, data?)`, `phase(title)`, `workflow(pathOrSource, args?)` (one-level nested run).
 - `context` (`{ args, cwd, workflow, phase, log, budget }`) and `orchestrator` (namespace alias for the
   primitives) for Claude-compatible saved workflows.
@@ -230,7 +232,8 @@ Bound scope (ctx is auto-injected — never pass it):
 Top-level `await` and a top-level `return` (or top-level `export default <expr>`) become `record.result`.
 The journaled `kind: "script"` record is readable by `status`, updates while the script is running, and includes
 the dynamic worker records spawned by `agent`, `spawnWorker`, `loopUntilDry`, and `adversarialVerify`. See
-`examples/parallel-reduce.workflow.js`, `examples/budget-loop.workflow.js`, and
+`examples/parallel-reduce.workflow.js`, `examples/budget-loop.workflow.js`,
+`examples/research-loop.workflow.js` (a stateful loop-until-dry research template), and
 `examples/deep-research.workflow.js` (a plan → gather → verify → synthesize research harness), and
 `cookbook.md` for the composed patterns.
 

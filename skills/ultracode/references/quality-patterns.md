@@ -58,13 +58,12 @@ surface nothing new, rather than guessing a fixed count (which always misses the
 visible in `events[]` (maxRounds, budget, and cap each log a terminal `reason`; the dry stop shows up as the
 per-round `round N dry (X/dryRounds)` lines).
 
-**Convergence is yours to engineer.** `loopUntilDry` does no dedup and feeds nothing forward — `makePrompt`
-receives only `(round, ctx)` and never sees a prior round's findings, and a `kind: "loop"` step exposes only
-`{{round}}`. So a round that re-finds the same items never counts as dry and the loop just runs to `maxRounds`.
-The built-in is the right tool only when each round is *independently* productive (the work naturally yields new
-items, or re-finds are acceptable and you dedup in post). When you need each round to avoid what earlier rounds
-already found — the usual case for an exhaustive sweep — **hand-roll a `while` loop** that holds a `seen` set
-and injects it into each round's prompt (see the composed harness in `cookbook.md`).
+**Convergence is yours to engineer.** For ordinary no-repeat discovery, use
+`loopUntilDry(..., { dedupeFindings: true })`: `makePrompt` receives `(round, ctx, state)`, where
+`state.seenList` is the running set of finding/source keys, and a round that only repeats seen items counts as
+dry. A declarative `kind: "loop"` step can set `dedupe_findings: true` and render `{{seen}}`,
+`{{seen_json}}`, and `{{consecutive_dry}}` in its prompt. Hand-roll a `while` loop only when the convergence
+rule is more custom than "new findings appeared."
 
 ## Multi-modal sweep
 

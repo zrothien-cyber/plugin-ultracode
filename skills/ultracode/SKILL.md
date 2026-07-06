@@ -208,9 +208,9 @@ code-verified versions: `references/cookbook.md`.
 - **Judge panel** — N attempts from different framings → blind parallel judges → synthesize from the winner,
   grafting the best ideas from the runners-up. Unlike adversarial verify there's no built-in judge primitive —
   run the judges as blind workers and pick the winner yourself in the parent.
-- **Loop-until-dry** — keep spawning finders until K consecutive dry rounds. *You* own cross-round dedup:
-  `loopUntilDry` feeds nothing forward, so re-finds never count as dry — for a no-repeat sweep, hand-roll a
-  `while` loop holding a `seen` set injected into each round's prompt. → cookbook §2–3
+- **Loop-until-dry** — keep spawning finders until K consecutive dry rounds. For no-repeat sweeps, use
+  `loopUntilDry(..., { dedupeFindings: true })`; the prompt builder receives `(round, ctx, state)` with
+  `state.seenList`, and repeat-only rounds count as dry. → cookbook §2–3
 - **Multi-modal sweep** — parallel finders, each searching a different way (by-module/symbol/test/recent), blind
   to each other.
 - **Completeness critic** — a final "what's missing?" worker whose output becomes the next round of work.

@@ -1682,6 +1682,32 @@ async function runPipeline(items, stages, opts = {}) {
   return Promise.all(chains);
 }
 
+function defaultLoopItems(value) {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value.findings)) return value.findings;
+  if (Array.isArray(value.claims)) return value.claims;
+  if (Array.isArray(value.sources)) return value.sources;
+  return [];
+}
+
+function stableLoopKey(value) {
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
+  if (!value || typeof value !== "object") return String(value);
+  for (const key of ["id", "key", "url", "href", "link", "source", "path", "file"]) {
+    if (typeof value[key] === "string" && value[key].trim()) return value[key].replace(/\s+/g, " ").trim();
+  }
+  if (typeof value.claim === "string" && typeof value.source === "string") {
+    return `${value.claim.replace(/\s+/g, " ").trim()} :: ${value.source.replace(/\s+/g, " ").trim()}`;
+  }
+  return stableJson(value);
+}
+
+function stableJson(value) {
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+}
+
 // Discovery loop: repeatedly spawn finders until K consecutive dry rounds, or a
 // round / budget / lifetime cap is hit (the stop reason is always logged).
 async function loopUntilDry(makePrompt, opts = {}) {
@@ -1689,11 +1715,30 @@ async function loopUntilDry(makePrompt, opts = {}) {
   const schema = opts.schema === undefined ? WORKER_SCHEMA : opts.schema;
   const dryRounds = opts.dryRounds || 2;
   const maxRounds = opts.maxRounds || 10;
+  const dedupe = Boolean(opts.dedupe || opts.dedupeFindings || opts.dedupe_findings || opts.dedupeSources || opts.dedupe_sources);
+  const extractItems = typeof opts.extractItems === "function" ? opts.extractItems : defaultLoopItems;
+  const keyItem = typeof opts.dedupeKey === "function" ? opts.dedupeKey : stableLoopKey;
   const isDry =
     typeof opts.isDry === "function"
       ? opts.isDry
       : (result) => !result || (Array.isArray(result.findings) && result.findings.length === 0);
   const collected = [];
+  const seen = opts.seen instanceof Set
+    ? opts.seen
+    : new Set(Array.isArray(opts.seen) ? opts.seen.map((item) => String(item)) : []);
+  const state = opts.state && typeof opts.state === "object" ? opts.state : {};
+  Object.assign(state, {
+    collected,
+    seen,
+    seenList: Array.from(seen),
+    consecutiveDry: 0,
+    dryRounds,
+    maxRounds,
+    lastResult: null,
+    lastValue: null,
+    lastFresh: [],
+    lastDuplicates: []
+  });
   let consecutiveDry = 0;
   let round = 0;
   while (round < maxRounds && consecutiveDry < dryRounds) {
@@ -1705,7 +1750,10 @@ async function loopUntilDry(makePrompt, opts = {}) {
       log(ctx, `loopUntilDry stopped after ${round} rounds: lifetime agent cap reached.`, { reason: "maxAgents" });
       break;
     }
-    const result = await spawnWorker(makePrompt(round, ctx), {
+    state.round = round;
+    state.consecutiveDry = consecutiveDry;
+    state.seenList = Array.from(seen);
+    const result = await spawnWorker(makePrompt(round, ctx, state), {
       ctx,
       schema,
       sandbox: opts.sandbox,
@@ -1725,14 +1773,44 @@ async function loopUntilDry(makePrompt, opts = {}) {
       retryJitter: firstDefined(opts.retryJitter, opts.retry_jitter)
     });
     round += 1;
-    if (result.status !== "completed" || isDry(result.value)) {
+    state.lastResult = result;
+    state.lastValue = result.value;
+    let fresh = [];
+    let duplicates = [];
+    let dedupeDry = false;
+    if (result.status === "completed" && dedupe) {
+      const items = extractItems(result.value) || [];
+      for (const item of items) {
+        const rawKey = keyItem(item);
+        if (rawKey === undefined || rawKey === null) continue;
+        const key = String(rawKey);
+        if (!key) continue;
+        if (seen.has(key)) duplicates.push(item);
+        else {
+          seen.add(key);
+          fresh.push(item);
+        }
+      }
+      dedupeDry = items.length > 0 && fresh.length === 0;
+      state.seenList = Array.from(seen);
+      state.lastFresh = fresh;
+      state.lastDuplicates = duplicates;
+    }
+    if (result.status !== "completed" || isDry(result.value) || dedupeDry) {
       consecutiveDry += 1;
+      state.consecutiveDry = consecutiveDry;
+      if (dedupeDry) {
+        log(ctx, `loopUntilDry: round ${round} repeated ${duplicates.length} seen item(s).`, { round, reason: "dedupe" });
+      }
       log(ctx, `loopUntilDry: round ${round} dry (${consecutiveDry}/${dryRounds}).`, { round });
       continue;
     }
     consecutiveDry = 0;
+    state.consecutiveDry = consecutiveDry;
     collected.push(result.value);
   }
+  state.round = round;
+  state.done = true;
   if (round >= maxRounds) log(ctx, `loopUntilDry reached maxRounds=${maxRounds}.`, { reason: "maxRounds" });
   return collected;
 }
@@ -2414,6 +2492,8 @@ function renderValue(value) {
 //   {{steps.<id>.output.<path>}}   dot-path drill-in
 //   {{steps.<id>.summary}}         dep output.summary
 //   {{round}}                      loop round index
+//   {{seen}} / {{seen_json}}       loop dedupe memory
+//   {{consecutive_dry}}            loop dry streak
 //   {{item.<key>}}                 parallel item field
 // Any unresolved/leftover {{ }} throws (no silent blanks).
 function renderTemplate(str, scope) {
@@ -2424,6 +2504,14 @@ function renderTemplate(str, scope) {
     if (expr === "round") {
       if (scope && scope.round !== undefined) return String(scope.round);
       throw new Error(`renderTemplate: {{round}} used outside a loop step.`);
+    }
+    if (expr === "seen" || expr === "seen_json") {
+      if (!scope || !Array.isArray(scope.seen)) throw new Error(`renderTemplate: {{${expr}}} used outside a stateful loop step.`);
+      return expr === "seen_json" ? JSON.stringify(scope.seen) : (scope.seen.length ? scope.seen.join("\n") : "(none)");
+    }
+    if (expr === "consecutive_dry") {
+      if (scope && scope.consecutive_dry !== undefined) return String(scope.consecutive_dry);
+      throw new Error(`renderTemplate: {{consecutive_dry}} used outside a loop step.`);
     }
     if (expr === "item" || expr.startsWith("item.")) {
       if (!scope || scope.item === undefined) {
@@ -2547,6 +2635,7 @@ function compileSteps(steps, defaults) {
     } else if (kind === "loop") {
       step.dry_rounds = raw.dry_rounds ? Math.max(1, Math.floor(Number(raw.dry_rounds))) : 2;
       step.max_rounds = raw.max_rounds ? Math.max(1, Math.floor(Number(raw.max_rounds))) : 10;
+      step.dedupe_findings = Boolean(raw.dedupe || raw.dedupe_findings || raw.dedupeFindings);
     } else if (kind === "parallel") {
       if (Array.isArray(raw.items)) {
         for (const it of raw.items) {
@@ -2719,12 +2808,18 @@ async function executeStep(step, results, ctx, codexBin, codexHomeValue, retryWo
 
   if (step.kind === "loop") {
     const collected = await loopUntilDry(
-      (round) => renderTemplate(step.prompt, { ...baseScope, round }),
+      (round, _ctx, state) => renderTemplate(step.prompt, {
+        ...baseScope,
+        round,
+        seen: state.seenList || [],
+        consecutive_dry: state.consecutiveDry || 0
+      }),
       {
         ctx,
         schema: step.schema,
         dryRounds: step.dry_rounds,
         maxRounds: step.max_rounds,
+        dedupeFindings: step.dedupe_findings,
         sandbox: step.sandbox,
         model: step.model,
         reasoningEffort: step.reasoning_effort,
