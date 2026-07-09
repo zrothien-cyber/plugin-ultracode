@@ -80,11 +80,15 @@ schemas, or no verification.
 ## Operating rules
 
 - **Choose model and reasoning by task complexity.** When a run does not require a custom model mix, set the
-  worker `model` and `reasoning_effort` deliberately instead of leaving complexity implicit:
-  `gpt-5.4-mini` + `high` for straightforward, narrow tasks; `gpt-5.5` + `medium` for standard research/search;
-  `gpt-5.5` + `high` for standard coding; `gpt-5.5` + `xhigh` for hard problem solving. For mixed workflows,
-  keep the cheap/narrow lanes on `gpt-5.4-mini` + `high` and escalate only the stages that need broader
-  reasoning. Do not use `xhigh` as a blanket default.
+  worker `model` and `reasoning_effort` deliberately instead of leaving complexity implicit. The default is
+  `gpt-5.6-terra` + `medium`:
+  `gpt-5.6-luna` + `low` for high-volume, latency-sensitive work; `gpt-5.6-terra` + `medium` for standard
+  research and coding; `gpt-5.6-sol` + `high` for complex work; and `gpt-5.6-sol` + `xhigh` or `max` only when
+  evaluation shows a quality gain. In Codex CLI, GPT-5.6 supports `none`, `low`, `medium`, `high`, `xhigh`,
+  `max`, and `ultra`; use `ultra` only when evaluation shows a clear benefit. Use the explicit `gpt-5.6-sol`,
+  `gpt-5.6-terra`, or `gpt-5.6-luna` IDs: the API alias `gpt-5.6` is not available to ChatGPT-authenticated
+  Codex. For mixed workflows, keep narrow lanes on Luna or Terra and escalate only the stages that need broader
+  reasoning. Do not use `max` or `ultra` as a blanket default.
 - **Do not hoard the work in the parent thread.** If a task can be expressed as a worker lane, stage, verifier,
   critic, judge, writer, or synthesizer, put it in the workflow. Parent work should mostly be: choose the
   decomposition, set schemas and edges, launch, monitor failures, integrate returned evidence/diffs, and run the
@@ -110,10 +114,11 @@ schemas, or no verification.
   20 min) is **not** retried — transient-error retries are opt-in via `max_retries` (default `0`) and never cover
   a timeout — so don't set a tight `timeout_ms` for deep work, and read a thin result set as evidence of failures,
   not of a clean codebase.
-- **Use a Codex goal for complex Ultracode tasks**, prefixing the objective with `Use $ultracode to ...` so
-  every continuation re-triggers this skill. The goal guards against ending after the worker summary but before
-  the work is done: clear it only once the top-level outcome — synthesis, edits, verification — is genuinely
-  settled. (Procedure: README "Pair with Codex goals".)
+- **Always use a Codex goal when Ultracode is invoked**, prefixing the objective with `Use $ultracode to ...` so
+  every continuation re-triggers this skill. This goal is the mechanism that keeps multi-turn Ultracode work on
+  track: it guards against ending after the worker summary but before synthesis, edits, integration, and final
+  verification are genuinely settled. Clear it only once the top-level outcome is done. (Procedure: README "Pair
+  with Codex goals".)
 - **Surface the dashboard.** Leave the run UI on; the moment `ui.ready` fires (or from the final `record.ui.url`)
   open the URL in the Codex in-app browser, else print it as a plain clickable link so the user can watch the run
   live. (Mechanics and flags: `references/cli.md`.)
@@ -207,9 +212,9 @@ code-verified versions: `references/cookbook.md`.
 - **Judge panel** — N attempts from different framings → blind parallel judges → synthesize from the winner,
   grafting the best ideas from the runners-up. Unlike adversarial verify there's no built-in judge primitive —
   run the judges as blind workers and pick the winner yourself in the parent.
-- **Loop-until-dry** — keep spawning finders until K consecutive dry rounds. *You* own cross-round dedup:
-  `loopUntilDry` feeds nothing forward, so re-finds never count as dry — for a no-repeat sweep, hand-roll a
-  `while` loop holding a `seen` set injected into each round's prompt. → cookbook §2–3
+- **Loop-until-dry** — keep spawning finders until K consecutive dry rounds. For no-repeat sweeps, use
+  `loopUntilDry(..., { dedupeFindings: true })`; the prompt builder receives `(round, ctx, state)` with
+  `state.seenList`, and repeat-only rounds count as dry. → cookbook §2–3
 - **Multi-modal sweep** — parallel finders, each searching a different way (by-module/symbol/test/recent), blind
   to each other.
 - **Completeness critic** — a final "what's missing?" worker whose output becomes the next round of work.

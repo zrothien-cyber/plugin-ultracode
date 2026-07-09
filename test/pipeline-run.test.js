@@ -240,6 +240,49 @@ test("loop step: loopUntilDry collects non-dry rounds then stops on dry streak",
   });
 });
 
+test("loop step: dedupe_findings treats repeat-only rounds as dry and exposes seen template", async () => {
+  await withCodexHome(async (home) => {
+    const first = JSON.stringify({
+      summary: "found",
+      findings: ["claim A - https://example.com/a"],
+      recommended_actions: [],
+      risks: [],
+      verification: [],
+      confidence: "high"
+    });
+    const repeat = JSON.stringify({
+      summary: "repeat",
+      findings: ["claim A - https://example.com/a"],
+      recommended_actions: [],
+      risks: [],
+      verification: [],
+      confidence: "high"
+    });
+    const wf = await withCodexCliPath(MOCK, async () =>
+      withMockEnv({ MOCK_CODEX_COUNTER: freshCounterPath(), MOCK_CODEX_RESPONSE: first, MOCK_CODEX_ALT_RESPONSE: repeat }, async () =>
+        runPipelineSpec({
+          cwd: home,
+          codex_bin: MOCK,
+          codex_home: home,
+          concurrency: 1,
+          steps: [{
+            id: "hunt",
+            kind: "loop",
+            prompt: "round {{round}} seen {{seen_json}} dry {{consecutive_dry}}",
+            max_rounds: 3,
+            dry_rounds: 1,
+            dedupe_findings: true
+          }]
+        })
+      )
+    );
+    const hunt = wf.workers.find((w) => w.id === "hunt");
+    assert.strictEqual(hunt.kind, "loop");
+    assert.strictEqual(hunt.result.length, 1, "repeat-only second round counts as dry");
+    assert.deepStrictEqual(hunt.result[0].findings, ["claim A - https://example.com/a"]);
+  });
+});
+
 test("parallel step with items fans out one worker per item", async () => {
   await withCodexHome(async (home) => {
     const wf = await withCodexCliPath(MOCK, async () =>

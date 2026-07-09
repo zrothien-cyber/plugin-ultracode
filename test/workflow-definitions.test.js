@@ -50,7 +50,19 @@ test("saveWorkflowDefinition writes a project workflow", async () => {
 });
 
 test("repo Claude workflow examples load as compatible definitions with phase detail", async () => {
-  const cwd = path.join(__dirname, "..");
+  const cwd = freshTmpDir("ultracode-def-cwd-");
+  fs.mkdirSync(path.join(cwd, ".claude", "workflows"), { recursive: true });
+  fs.writeFileSync(
+    path.join(cwd, ".claude", "workflows", "skill-spirit-audit.js"),
+    [
+      "export const meta = {",
+      '  name: "Skill Spirit Audit",',
+      '  description: "fixture",',
+      '  phases: [{ title: "Lenses", detail: "Check the design from several angles." }]',
+      "};",
+      "return { ok: true };"
+    ].join("\n")
+  );
   const list = await listWorkflowDefinitions({ cwd, home: freshTmpDir("ultracode-def-home-"), codex_home: freshTmpDir("ultracode-def-codex-") });
   const audit = list.find((definition) => definition.id === "skill-spirit-audit");
   assert.ok(audit, "local skill-spirit-audit workflow is discovered");

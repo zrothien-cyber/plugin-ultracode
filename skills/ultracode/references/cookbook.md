@@ -110,18 +110,18 @@ export default {
 };
 ```
 
-Why hand-rolled, not `loopUntilDry`: the built-in passes `makePrompt` only `(round, ctx)` and hands you results
-only when the whole call returns, so it can't carry `seen` between rounds. The `while` loop is the honest way to
-show convergence. Dedup is against `seen`, never `confirmed` — that's what makes it terminate.
+Why hand-rolled here: the custom loop verifies each fresh batch immediately and tracks a richer confirmed/dropped
+ledger. For ordinary no-repeat discovery, prefer the built-in stateful form in §3. Dedup is still against
+everything `seen`, never only `confirmed` — that's what makes it terminate.
 
 ---
 
 ## 3. When `loopUntilDry` fits — and when it can't
 
-Use the built-in when each round is independently productive and re-finds are fine (you dedup in post):
+Use the built-in for ordinary loop-until-dry discovery. Without dedupe it behaves like the original primitive:
+each productive round is collected and you dedup in post.
 
 ```js
-// loopUntilDry returns one WORKER_SCHEMA value per PRODUCTIVE round; it feeds nothing forward.
 const batches = await loopUntilDry(
   (round) => `Discovery round ${round + 1}. Find issues in src/. Return them in \`findings\`.`,
   { dryRounds: 2, maxRounds: 8 }
@@ -129,9 +129,22 @@ const batches = await loopUntilDry(
 const all = [...new Set(batches.flatMap((b) => b.findings || []))];   // dedup happens HERE, after the fact
 ```
 
-It **cannot** avoid re-finding across rounds: `makePrompt` never sees prior findings, and a `kind: "loop"` step
-exposes only `{{round}}`. If round 2 must skip what round 1 found, the built-in won't do it — reach for the
-hand-rolled `while` loop in skeleton 2 (a closure-held `seen` set injected into each prompt) instead.
+When round 2 must skip what round 1 found, opt into stateful dedupe. `makePrompt` receives
+`(round, ctx, state)`, and `state.seenList` is updated after each completed worker. A round whose `findings`
+are all repeats counts as dry:
+
+```js
+const batches = await loopUntilDry(
+  (round, _ctx, state) =>
+    `Discovery round ${round + 1}. Return ONLY findings not already seen:\n` +
+    (state.seenList.length ? state.seenList.join("\n") : "(none)"),
+  { dryRounds: 2, maxRounds: 8, dedupeFindings: true }
+);
+const all = [...new Set(batches.flatMap((b) => b.findings || []))];
+```
+
+Declarative `kind: "loop"` supports the same pattern with `dedupe_findings: true` and the `{{seen}}`,
+`{{seen_json}}`, and `{{consecutive_dry}}` template values.
 
 ---
 

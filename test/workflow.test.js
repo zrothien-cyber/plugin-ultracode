@@ -29,17 +29,17 @@ test("legacy fan-out: 2 workers complete, aggregate doubles, state re-readable",
         codex_bin: MOCK,
         codex_home: home,
         concurrency: 2,
-        model: "gpt-5.5",
+        model: "gpt-5.6-terra",
         reasoning_effort: "high"
       })
     );
 
     assert.strictEqual(wf.status, "completed");
-    assert.strictEqual(wf.options.model, "gpt-5.5");
+    assert.strictEqual(wf.options.model, "gpt-5.6-terra");
     assert.strictEqual(wf.options.reasoning_effort, "high");
     assert.strictEqual(wf.workers.length, 2);
     assert.ok(wf.workers.every((w) => w.status === "completed"));
-    assert.ok(wf.workers.every((w) => w.model === "gpt-5.5"));
+    assert.ok(wf.workers.every((w) => w.model === "gpt-5.6-terra"));
     assert.ok(wf.workers.every((w) => w.reasoning_effort === "high"));
 
     // aggregate_usage = 2x per-worker. total_tokens per worker = 10+5+3 = 18 => 36
@@ -62,11 +62,11 @@ test("workers_spec: explicit path runs both specs (incl schema:null), stores spe
         codex_bin: MOCK,
         codex_home: home,
         concurrency: 2,
-        model: "gpt-5.5",
+        model: "gpt-5.6-terra",
         reasoning_effort: "medium",
         workers_spec: [
           { prompt: "spec one", label: "alpha" },
-          { prompt: "spec two", label: "beta", schema: null, model: "gpt-5.4-mini", reasoning_effort: "high" }
+          { prompt: "spec two", label: "beta", schema: null, model: "gpt-5.6-luna", reasoning_effort: "high" }
         ]
       })
     );
@@ -81,11 +81,11 @@ test("workers_spec: explicit path runs both specs (incl schema:null), stores spe
     // Each worker has a stored spec for resume.
     assert.ok(wf.workers.every((w) => w.spec && typeof w.spec.prompt === "string"));
     const alpha = wf.workers.find((w) => w.label === "alpha");
-    assert.strictEqual(alpha.model, "gpt-5.5", "top-level model inherited from workflow");
+    assert.strictEqual(alpha.model, "gpt-5.6-terra", "top-level model inherited from workflow");
     assert.strictEqual(alpha.reasoning_effort, "medium", "top-level reasoning inherited from workflow");
     const beta = wf.workers.find((w) => w.label === "beta");
     assert.strictEqual(beta.spec.schema, null, "schema:null preserved in stored spec");
-    assert.strictEqual(beta.model, "gpt-5.4-mini", "top-level model override is journaled");
+    assert.strictEqual(beta.model, "gpt-5.6-luna", "top-level model override is journaled");
     assert.strictEqual(beta.reasoning_effort, "high", "top-level reasoning override is journaled");
     assert.strictEqual(beta.value, beta.result, "raw-text workers expose both result and value");
   });
@@ -150,9 +150,10 @@ test("ui workflow persists worker starts before first completion", async () => {
           serverPid = parsed.ui && parsed.ui.server_pid;
           const events = Array.isArray(parsed.events) ? parsed.events : [];
           const workers = Array.isArray(parsed.workers) ? parsed.workers : [];
+          const startedCount = events.filter((event) => event.type === "worker.started").length;
           if (
             parsed.status === "running" &&
-            events.some((event) => event.type === "worker.started") &&
+            startedCount === 2 &&
             workers.some((worker) => worker.status === "running") &&
             workers.every((worker) => worker.status !== "completed")
           ) {
@@ -203,6 +204,53 @@ test("partial status: exactly one of two workers fails => status 'partial'", asy
     const completed = wf.workers.filter((w) => w.status === "completed");
     assert.strictEqual(failed.length, 1, "exactly one worker failed");
     assert.strictEqual(completed.length, 1, "exactly one worker completed");
+  });
+});
+
+test("readWorkflow marks running records abandoned when recorded controller is gone", async () => {
+  await withCodexHome(async () => {
+    const id = "stale-controller-test";
+    const statePath = engine.statePathFor(id);
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify(
+        {
+          id,
+          status: "running",
+          started_at: startedAt,
+          completed_at: null,
+          controller: {
+            pid: 2147483647,
+            started_at: startedAt,
+            heartbeat_at: startedAt,
+            platform: process.platform
+          },
+          state_path: statePath,
+          workers: [
+            { id: "pending", status: "pending" },
+            { id: "running", status: "running" },
+            { id: "completed", status: "completed" }
+          ],
+          events: [],
+          aggregate_usage: engine.sumUsageFromWorkers([])
+        },
+        null,
+        2
+      )
+    );
+
+    const observed = await readWorkflow({ workflow_id: id });
+    assert.strictEqual(observed.status, "abandoned");
+    assert.strictEqual(observed.observed_status, "abandoned");
+    assert.match(observed.abandoned_reason, /controller pid 2147483647 is not live/);
+    assert.strictEqual(observed.workers[0].status, "abandoned");
+    assert.strictEqual(observed.workers[1].status, "abandoned");
+    assert.strictEqual(observed.workers[2].status, "completed");
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.strictEqual(persisted.status, "abandoned", "status reconciliation is persisted for dashboards");
   });
 });
 

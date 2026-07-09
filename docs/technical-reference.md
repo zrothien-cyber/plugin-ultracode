@@ -110,13 +110,17 @@ Choose worker model and reasoning by task complexity:
 
 | Work type | Model | Reasoning |
 | --- | --- | --- |
-| Straightforward or narrow | `gpt-5.4-mini` | `high` |
-| Standard research or search | `gpt-5.5` | `medium` |
-| Standard coding | `gpt-5.5` | `high` |
-| Hard problem solving | `gpt-5.5` | `xhigh` |
+| High-volume or latency-sensitive | `gpt-5.6-luna` | `low` |
+| Standard research or coding | `gpt-5.6-terra` | `medium` |
+| Complex coding or reasoning | `gpt-5.6-sol` | `high` |
+| Hard quality-first problem solving | `gpt-5.6-sol` | `xhigh`, `max`, or `ultra` |
 
-Set defaults with `--model` and `--reasoning-effort`, or override individual
-workers and steps in `workers_spec[]`, `steps[]`, or workflow scripts.
+For ChatGPT-authenticated Codex CLI, use `gpt-5.6-sol`, `gpt-5.6-terra`, or
+`gpt-5.6-luna`; the API alias `gpt-5.6` is not available. The CLI accepts
+`none`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` reasoning effort.
+Ultracode defaults to `gpt-5.6-terra` with `medium` reasoning. Override the
+default with `--model` and `--reasoning-effort`, or override individual workers
+and steps in `workers_spec[]`, `steps[]`, or workflow scripts.
 
 ## Important Runtime Rules
 

@@ -51,7 +51,9 @@ const engine = require("./ultracode-engine");
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.rename(tmpPath, filePath);
 }
 
 async function writeText(filePath, value) {
@@ -86,6 +88,7 @@ function makeScriptPersister(record, ctx) {
   let chain = Promise.resolve();
   return {
     schedule() {
+      engine._internal.refreshControllerHeartbeat(record);
       const snapshot = JSON.parse(JSON.stringify(record));
       chain = chain
         .then(() => writeJson(record.state_path, snapshot))
@@ -416,14 +419,18 @@ function buildScope(ctx, input, hooks = {}) {
     const defaults = {
       cwd: input.cwd ? path.resolve(input.cwd) : process.cwd(),
       sandbox: input.sandbox || "read-only",
-      model: typeof input.model === "string" && input.model.trim() ? input.model.trim() : undefined,
-      reasoning_effort: input.reasoning_effort || input.reasoningEffort,
+      model: engine.DEFAULT_MODEL,
+      reasoning_effort: engine.DEFAULT_REASONING_EFFORT,
       timeout_ms:
         input.timeout_ms === undefined || input.timeout_ms === null
           ? undefined
           : Math.max(1000, Math.floor(Number(input.timeout_ms))),
       executor: "cold"
     };
+    if (typeof input.model === "string" && input.model.trim()) defaults.model = input.model.trim();
+    if (input.reasoning_effort || input.reasoningEffort) {
+      defaults.reasoning_effort = input.reasoning_effort || input.reasoningEffort;
+    }
     const { compiled } = engine._internal.compileSteps(steps, defaults);
     const retry = engine._internal.resolveRetryInput(input);
     const results = await engine.runDagOnCtx(compiled, ctx, {
@@ -650,6 +657,7 @@ async function runScript(input = {}) {
     started_at: startedAt,
     completed_at: null,
     duration_ms: 0,
+    controller: engine._internal.controllerSnapshot(startedAt),
     cwd,
     options: {
       concurrency: ctx.concurrency,

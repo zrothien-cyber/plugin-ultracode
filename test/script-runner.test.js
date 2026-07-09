@@ -5,7 +5,7 @@ const assert = require("node:assert");
 const path = require("path");
 const fs = require("fs");
 
-const { engine, MOCK, MOCK_FAIL, freshTmpDir, withCodexHome } = require("./helpers/env.js");
+const { engine, MOCK, MOCK_FAIL, freshCounterPath, freshTmpDir, withCodexCliPath, withCodexHome, withMockEnv } = require("./helpers/env.js");
 const { runScript, transformSource } = require("../scripts/ultracode-script-runner.js");
 
 const ECHO_FIXTURE = path.join(__dirname, "fixtures", "echo.workflow.js");
@@ -363,6 +363,7 @@ test("journaling: record shape + state file readable by readWorkflow (by id and 
     });
     assert.strictEqual(rec.kind, "script");
     assert.strictEqual(rec.status, "completed");
+    assert.strictEqual(rec.controller.pid, process.pid);
     for (const k of ["id", "started_at", "completed_at", "duration_ms", "cwd", "options", "state_path", "result", "events", "aggregate_usage"]) {
       assert.ok(Object.prototype.hasOwnProperty.call(rec, k), `record has ${k}`);
     }
@@ -424,6 +425,45 @@ test("helper primitives inherit phase and journal their worker records", async (
   const finder = rec.workers.find((w) => w.label === "finder-round-1");
   assert.ok(finder, "finder worker was journaled");
   assert.strictEqual(finder.phase, "discover");
+});
+
+test("loopUntilDry exposes seen state and treats repeated findings as dry", async () => {
+  const first = JSON.stringify({
+    summary: "found",
+    findings: ["claim A - https://example.com/a"],
+    recommended_actions: [],
+    risks: [],
+    verification: [],
+    confidence: "high"
+  });
+  const repeat = JSON.stringify({
+    summary: "repeat",
+    findings: ["claim A - https://example.com/a"],
+    recommended_actions: [],
+    risks: [],
+    verification: [],
+    confidence: "high"
+  });
+  const rec = await withCodexCliPath(MOCK, async () =>
+    withMockEnv({ MOCK_CODEX_COUNTER: freshCounterPath(), MOCK_CODEX_RESPONSE: first, MOCK_CODEX_ALT_RESPONSE: repeat }, async () =>
+      runScript({
+        source: [
+          "const seenByRound = [];",
+          "const batches = await loopUntilDry((round, _ctx, state) => {",
+          "  seenByRound.push([...state.seenList]);",
+          "  return 'round ' + round;",
+          "}, { maxRounds: 3, dryRounds: 1, dedupeFindings: true });",
+          "return { seenByRound, batches: batches.map((b) => b.findings) };"
+        ].join("\n"),
+        concurrency: 1,
+        ...baseOpts()
+      })
+    )
+  );
+  assert.strictEqual(rec.status, "completed");
+  assert.deepStrictEqual(rec.result.seenByRound, [[], ["claim A - https://example.com/a"]]);
+  assert.deepStrictEqual(rec.result.batches, [["claim A - https://example.com/a"]]);
+  assert.strictEqual(rec.workers.length, 2, "second repeated round was dry and stopped the loop");
 });
 
 test("script status file updates with live events and pending workers mid-flight", async () => {

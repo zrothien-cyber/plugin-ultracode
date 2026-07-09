@@ -83,6 +83,8 @@ test("resolveWorkerOpts executor defaults to 'cold' and persistSession false", (
   const r = resolveWorkerOpts({});
   assert.strictEqual(r.executor, "cold");
   assert.strictEqual(r.persistSession, false);
+  assert.strictEqual(r.model, engine.DEFAULT_MODEL);
+  assert.strictEqual(r.reasoningEffort, engine.DEFAULT_REASONING_EFFORT);
 });
 
 test("resolveWorkerOpts executor:'resume' forces persistSession=true", () => {

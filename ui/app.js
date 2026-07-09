@@ -3,6 +3,7 @@ import { JournalPanel } from "./journal-panel.js";
 import { WorkflowGraph } from "./graph.js";
 import { WorkflowLibrary } from "./workflow-library.js";
 import { RunSwitcher } from "./run-switcher.js";
+import { HookSessionsPanel } from "./hook-sessions-panel.js";
 import { fetchJson, formatDuration, normalizeWorkflow, totalTokens, workflowIdFromLocation } from "./state.js";
 import { runModelSettings } from "./model-settings.js";
 
@@ -90,6 +91,7 @@ function App() {
   const [workflowId, setWorkflowId] = useState(workflowIdFromLocation());
   const [record, setRecord] = useState(null);
   const [runs, setRuns] = useState([]);
+  const [hookSessions, setHookSessions] = useState([]);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -99,9 +101,10 @@ function App() {
     setRefreshing(true);
     try {
       const endpoint = nextId ? `/api/workflows/${encodeURIComponent(nextId)}` : "/api/workflows/latest";
-      const [nextRecord, list] = await Promise.all([fetchJson(endpoint), fetchJson("/api/workflows")]);
+      const [nextRecord, list, sessions] = await Promise.all([fetchJson(endpoint), fetchJson("/api/workflows"), fetchJson("/api/hook-sessions")]);
       setRecord(nextRecord);
       setRuns(Array.isArray(list.workflows) ? list.workflows : []);
+      setHookSessions(Array.isArray(sessions.sessions) ? sessions.sessions : []);
       setWorkflowId(nextRecord.id);
       setError("");
       if (window.location.pathname !== `/workflow/${nextRecord.id}`) {
@@ -145,6 +148,7 @@ function App() {
     error ? h("div", { className: "error-banner" }, h(AlertTriangle, { size: 18 }), h("span", null, error)) : null,
     h(StatsStrip, { record, graph }),
     h(WorkflowGraph, { record: record || {}, graph, selectedId, onSelect: inspectAgent }),
+    h(HookSessionsPanel, { sessions: hookSessions }),
     h(JournalPanel, { graph }),
     h(
       "footer",

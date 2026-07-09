@@ -11,6 +11,11 @@ const util = require("util");
 
 const appServerClient = require("./app-server-client");
 const { workflowIdentity } = require("./run-identity");
+const {
+  controllerSnapshot,
+  refreshControllerHeartbeat,
+  reconcileRunningRecord
+} = require("./run-lifecycle");
 const { attachWorkflowUi, shouldLaunchUi } = require("./ultracode-ui-launcher");
 
 const execFileP = util.promisify(childProcess.execFile);
@@ -22,7 +27,11 @@ const DEFAULT_MAX_AGENTS = 1000;
 const MAX_NESTING_DEPTH = 1;
 const DEFAULT_LAUNCH_STAGGER_MS = 25;
 const VALID_SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
-const VALID_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+const DEFAULT_MODEL = "gpt-5.6-terra";
+const DEFAULT_REASONING_EFFORT = "medium";
+const GPT_5_6_MODELS = Object.freeze(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+const GPT_5_6_REASONING_EFFORTS = Object.freeze(["none", "low", "medium", "high", "xhigh", "max", "ultra"]);
+const VALID_EFFORTS = new Set(GPT_5_6_REASONING_EFFORTS);
 // Worker transports. 'exec' (default) = today's `codex exec --json` JSONL
 // scraping, byte-for-byte unchanged. 'app-server' = opt-in versioned JSON-RPC
 // app-server transport (with automatic fallback to exec). 'exec-server' = a
@@ -162,6 +171,14 @@ function positiveInteger(value, fallback, max) {
   return Math.min(number, max);
 }
 
+function resolveModel(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : DEFAULT_MODEL;
+}
+
+function resolveReasoningEffort(value) {
+  return value || DEFAULT_REASONING_EFFORT;
+}
+
 function normalizeOptions(input = {}) {
   const task = assertNonEmptyString(input.task, "task");
   const cwd = path.resolve(input.cwd || process.cwd());
@@ -170,7 +187,7 @@ function normalizeOptions(input = {}) {
   if (!VALID_SANDBOXES.has(sandbox)) {
     throw new Error(`sandbox must be one of: ${Array.from(VALID_SANDBOXES).join(", ")}.`);
   }
-  const reasoningEffort = input.reasoning_effort || input.reasoningEffort;
+  const reasoningEffort = resolveReasoningEffort(input.reasoning_effort || input.reasoningEffort);
   if (reasoningEffort !== undefined && !VALID_EFFORTS.has(reasoningEffort)) {
     throw new Error(`reasoning_effort must be one of: ${Array.from(VALID_EFFORTS).join(", ")}.`);
   }
@@ -187,7 +204,7 @@ function normalizeOptions(input = {}) {
     cwd,
     workers: workerCount,
     sandbox,
-    model: typeof input.model === "string" && input.model.trim() ? input.model.trim() : undefined,
+    model: resolveModel(input.model),
     reasoning_effort: reasoningEffort,
     timeout_ms: timeoutMs,
     // Opt-in transport (default 'exec' = unchanged). resolveTransport coerces an
@@ -229,7 +246,9 @@ function planWorkflow(input = {}) {
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.rename(tmpPath, filePath);
 }
 
 async function readJson(filePath) {
@@ -265,7 +284,12 @@ async function readWorkflow(input = {}) {
   if (!filePath) {
     return { status: "missing", message: "No Ultracode workflow state exists yet." };
   }
-  return readJson(filePath);
+  const record = await readJson(filePath);
+  const reconciled = reconcileRunningRecord(record);
+  if (reconciled.changed) {
+    await writeJson(filePath, reconciled.record);
+  }
+  return reconciled.record;
 }
 
 // ---------------------------------------------------------------------------
@@ -968,7 +992,7 @@ function resolveWorkerOpts(opts = {}) {
   if (!VALID_SANDBOXES.has(sandbox)) {
     throw new Error(`sandbox must be one of: ${Array.from(VALID_SANDBOXES).join(", ")}.`);
   }
-  const reasoningEffort = opts.reasoningEffort || opts.reasoning_effort;
+  const reasoningEffort = resolveReasoningEffort(opts.reasoningEffort || opts.reasoning_effort);
   if (reasoningEffort !== undefined && reasoningEffort !== null && !VALID_EFFORTS.has(reasoningEffort)) {
     throw new Error(`reasoning_effort must be one of: ${Array.from(VALID_EFFORTS).join(", ")}.`);
   }
@@ -990,8 +1014,8 @@ function resolveWorkerOpts(opts = {}) {
   const transportStrict = resolveBool(firstDefined(opts.transport_strict, opts.transportStrict), false);
   return {
     sandbox,
-    model: typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined,
-    reasoningEffort: reasoningEffort || undefined,
+    model: resolveModel(opts.model),
+    reasoningEffort,
     timeoutMs: opts.timeoutMs || opts.timeout_ms || DEFAULT_TIMEOUT_MS,
     cwd: path.resolve(opts.cwd || process.cwd()),
     bin: opts.codex_bin || defaultCodexBin(),
@@ -1670,6 +1694,32 @@ async function runPipeline(items, stages, opts = {}) {
   return Promise.all(chains);
 }
 
+function defaultLoopItems(value) {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value.findings)) return value.findings;
+  if (Array.isArray(value.claims)) return value.claims;
+  if (Array.isArray(value.sources)) return value.sources;
+  return [];
+}
+
+function stableLoopKey(value) {
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
+  if (!value || typeof value !== "object") return String(value);
+  for (const key of ["id", "key", "url", "href", "link", "source", "path", "file"]) {
+    if (typeof value[key] === "string" && value[key].trim()) return value[key].replace(/\s+/g, " ").trim();
+  }
+  if (typeof value.claim === "string" && typeof value.source === "string") {
+    return `${value.claim.replace(/\s+/g, " ").trim()} :: ${value.source.replace(/\s+/g, " ").trim()}`;
+  }
+  return stableJson(value);
+}
+
+function stableJson(value) {
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+}
+
 // Discovery loop: repeatedly spawn finders until K consecutive dry rounds, or a
 // round / budget / lifetime cap is hit (the stop reason is always logged).
 async function loopUntilDry(makePrompt, opts = {}) {
@@ -1677,11 +1727,30 @@ async function loopUntilDry(makePrompt, opts = {}) {
   const schema = opts.schema === undefined ? WORKER_SCHEMA : opts.schema;
   const dryRounds = opts.dryRounds || 2;
   const maxRounds = opts.maxRounds || 10;
+  const dedupe = Boolean(opts.dedupe || opts.dedupeFindings || opts.dedupe_findings || opts.dedupeSources || opts.dedupe_sources);
+  const extractItems = typeof opts.extractItems === "function" ? opts.extractItems : defaultLoopItems;
+  const keyItem = typeof opts.dedupeKey === "function" ? opts.dedupeKey : stableLoopKey;
   const isDry =
     typeof opts.isDry === "function"
       ? opts.isDry
       : (result) => !result || (Array.isArray(result.findings) && result.findings.length === 0);
   const collected = [];
+  const seen = opts.seen instanceof Set
+    ? opts.seen
+    : new Set(Array.isArray(opts.seen) ? opts.seen.map((item) => String(item)) : []);
+  const state = opts.state && typeof opts.state === "object" ? opts.state : {};
+  Object.assign(state, {
+    collected,
+    seen,
+    seenList: Array.from(seen),
+    consecutiveDry: 0,
+    dryRounds,
+    maxRounds,
+    lastResult: null,
+    lastValue: null,
+    lastFresh: [],
+    lastDuplicates: []
+  });
   let consecutiveDry = 0;
   let round = 0;
   while (round < maxRounds && consecutiveDry < dryRounds) {
@@ -1693,7 +1762,10 @@ async function loopUntilDry(makePrompt, opts = {}) {
       log(ctx, `loopUntilDry stopped after ${round} rounds: lifetime agent cap reached.`, { reason: "maxAgents" });
       break;
     }
-    const result = await spawnWorker(makePrompt(round, ctx), {
+    state.round = round;
+    state.consecutiveDry = consecutiveDry;
+    state.seenList = Array.from(seen);
+    const result = await spawnWorker(makePrompt(round, ctx, state), {
       ctx,
       schema,
       sandbox: opts.sandbox,
@@ -1713,14 +1785,44 @@ async function loopUntilDry(makePrompt, opts = {}) {
       retryJitter: firstDefined(opts.retryJitter, opts.retry_jitter)
     });
     round += 1;
-    if (result.status !== "completed" || isDry(result.value)) {
+    state.lastResult = result;
+    state.lastValue = result.value;
+    let fresh = [];
+    let duplicates = [];
+    let dedupeDry = false;
+    if (result.status === "completed" && dedupe) {
+      const items = extractItems(result.value) || [];
+      for (const item of items) {
+        const rawKey = keyItem(item);
+        if (rawKey === undefined || rawKey === null) continue;
+        const key = String(rawKey);
+        if (!key) continue;
+        if (seen.has(key)) duplicates.push(item);
+        else {
+          seen.add(key);
+          fresh.push(item);
+        }
+      }
+      dedupeDry = items.length > 0 && fresh.length === 0;
+      state.seenList = Array.from(seen);
+      state.lastFresh = fresh;
+      state.lastDuplicates = duplicates;
+    }
+    if (result.status !== "completed" || isDry(result.value) || dedupeDry) {
       consecutiveDry += 1;
+      state.consecutiveDry = consecutiveDry;
+      if (dedupeDry) {
+        log(ctx, `loopUntilDry: round ${round} repeated ${duplicates.length} seen item(s).`, { round, reason: "dedupe" });
+      }
       log(ctx, `loopUntilDry: round ${round} dry (${consecutiveDry}/${dryRounds}).`, { round });
       continue;
     }
     consecutiveDry = 0;
+    state.consecutiveDry = consecutiveDry;
     collected.push(result.value);
   }
+  state.round = round;
+  state.done = true;
   if (round >= maxRounds) log(ctx, `loopUntilDry reached maxRounds=${maxRounds}.`, { reason: "maxRounds" });
   return collected;
 }
@@ -1910,6 +2012,7 @@ function makePersister(record, ctx) {
       // Snapshot the record at schedule time so each queued write captures the
       // progress as of when it was scheduled, rather than all writes racing to
       // serialize the same live (eventually final) object reference.
+      refreshControllerHeartbeat(record);
       const snapshot = JSON.parse(JSON.stringify(record));
       chain = chain
         .then(() => writeJson(record.state_path, snapshot))
@@ -2034,7 +2137,7 @@ async function runExplicitWorkflow(input) {
   if (!VALID_SANDBOXES.has(baseSandbox)) {
     throw new Error(`sandbox must be one of: ${Array.from(VALID_SANDBOXES).join(", ")}.`);
   }
-  const baseEffort = input.reasoning_effort || input.reasoningEffort;
+  const baseEffort = resolveReasoningEffort(input.reasoning_effort || input.reasoningEffort);
   if (baseEffort !== undefined && baseEffort !== null && !VALID_EFFORTS.has(baseEffort)) {
     throw new Error(`reasoning_effort must be one of: ${Array.from(VALID_EFFORTS).join(", ")}.`);
   }
@@ -2045,7 +2148,7 @@ async function runExplicitWorkflow(input) {
   const defaults = {
     cwd,
     sandbox: baseSandbox,
-    model: typeof input.model === "string" && input.model.trim() ? input.model.trim() : undefined,
+    model: resolveModel(input.model),
     reasoning_effort: baseEffort,
     timeout_ms: timeoutMs
   };
@@ -2087,6 +2190,7 @@ async function runExplicitWorkflow(input) {
     cwd,
     started_at: now,
     completed_at: null,
+    controller: controllerSnapshot(now),
     options: {
       workers: specs.length,
       sandbox: baseSandbox,
@@ -2201,6 +2305,7 @@ async function runWorkflow(input = {}) {
     cwd: options.cwd,
     started_at: now,
     completed_at: null,
+    controller: controllerSnapshot(now),
     options: {
       workers: options.workers,
       sandbox: options.sandbox,
@@ -2399,6 +2504,8 @@ function renderValue(value) {
 //   {{steps.<id>.output.<path>}}   dot-path drill-in
 //   {{steps.<id>.summary}}         dep output.summary
 //   {{round}}                      loop round index
+//   {{seen}} / {{seen_json}}       loop dedupe memory
+//   {{consecutive_dry}}            loop dry streak
 //   {{item.<key>}}                 parallel item field
 // Any unresolved/leftover {{ }} throws (no silent blanks).
 function renderTemplate(str, scope) {
@@ -2409,6 +2516,14 @@ function renderTemplate(str, scope) {
     if (expr === "round") {
       if (scope && scope.round !== undefined) return String(scope.round);
       throw new Error(`renderTemplate: {{round}} used outside a loop step.`);
+    }
+    if (expr === "seen" || expr === "seen_json") {
+      if (!scope || !Array.isArray(scope.seen)) throw new Error(`renderTemplate: {{${expr}}} used outside a stateful loop step.`);
+      return expr === "seen_json" ? JSON.stringify(scope.seen) : (scope.seen.length ? scope.seen.join("\n") : "(none)");
+    }
+    if (expr === "consecutive_dry") {
+      if (scope && scope.consecutive_dry !== undefined) return String(scope.consecutive_dry);
+      throw new Error(`renderTemplate: {{consecutive_dry}} used outside a loop step.`);
     }
     if (expr === "item" || expr.startsWith("item.")) {
       if (!scope || scope.item === undefined) {
@@ -2532,6 +2647,7 @@ function compileSteps(steps, defaults) {
     } else if (kind === "loop") {
       step.dry_rounds = raw.dry_rounds ? Math.max(1, Math.floor(Number(raw.dry_rounds))) : 2;
       step.max_rounds = raw.max_rounds ? Math.max(1, Math.floor(Number(raw.max_rounds))) : 10;
+      step.dedupe_findings = Boolean(raw.dedupe || raw.dedupe_findings || raw.dedupeFindings);
     } else if (kind === "parallel") {
       if (Array.isArray(raw.items)) {
         for (const it of raw.items) {
@@ -2704,12 +2820,18 @@ async function executeStep(step, results, ctx, codexBin, codexHomeValue, retryWo
 
   if (step.kind === "loop") {
     const collected = await loopUntilDry(
-      (round) => renderTemplate(step.prompt, { ...baseScope, round }),
+      (round, _ctx, state) => renderTemplate(step.prompt, {
+        ...baseScope,
+        round,
+        seen: state.seenList || [],
+        consecutive_dry: state.consecutiveDry || 0
+      }),
       {
         ctx,
         schema: step.schema,
         dryRounds: step.dry_rounds,
         maxRounds: step.max_rounds,
+        dedupeFindings: step.dedupe_findings,
         sandbox: step.sandbox,
         model: step.model,
         reasoningEffort: step.reasoning_effort,
@@ -2842,7 +2964,7 @@ async function runPipelineSpec(input = {}) {
   if (!VALID_SANDBOXES.has(baseSandbox)) {
     throw new Error(`sandbox must be one of: ${Array.from(VALID_SANDBOXES).join(", ")}.`);
   }
-  const baseEffort = input.reasoning_effort || input.reasoningEffort;
+  const baseEffort = resolveReasoningEffort(input.reasoning_effort || input.reasoningEffort);
   if (baseEffort !== undefined && baseEffort !== null && !VALID_EFFORTS.has(baseEffort)) {
     throw new Error(`reasoning_effort must be one of: ${Array.from(VALID_EFFORTS).join(", ")}.`);
   }
@@ -2853,7 +2975,7 @@ async function runPipelineSpec(input = {}) {
   const defaults = {
     cwd,
     sandbox: baseSandbox,
-    model: typeof input.model === "string" && input.model.trim() ? input.model.trim() : undefined,
+    model: resolveModel(input.model),
     reasoning_effort: baseEffort,
     timeout_ms: timeoutMs,
     // Top-level executor cascades to every step that does not set its own.
@@ -2919,6 +3041,7 @@ async function runPipelineSpec(input = {}) {
     cwd,
     started_at: now,
     completed_at: null,
+    controller: controllerSnapshot(now),
     options: {
       workers: compiled.length,
       sandbox: baseSandbox,
@@ -2972,6 +3095,10 @@ async function runPipelineSpec(input = {}) {
 module.exports = {
   MAX_WORKERS,
   DEFAULT_MAX_AGENTS,
+  DEFAULT_MODEL,
+  DEFAULT_REASONING_EFFORT,
+  GPT_5_6_MODELS,
+  GPT_5_6_REASONING_EFFORTS,
   WORKER_SCHEMA,
   VERDICT_SCHEMA,
   // workflow records
@@ -3031,6 +3158,11 @@ module.exports = {
     injectSchemaIntoPrompt,
     resolveTransport,
     normalizeAppServerUsage,
-    transportJournal
+    transportJournal,
+    resolveModel,
+    resolveReasoningEffort,
+    controllerSnapshot,
+    refreshControllerHeartbeat,
+    reconcileRunningRecord
   }
 };

@@ -72,6 +72,19 @@ Use Ultracode to review this refactor for correctness, security, and missing tes
 Good prompts name the goal, the scope, and the kind of confidence you want.
 Codex can choose the worker layout and verification pattern from there.
 
+## Pair With Codex Goals
+
+When Ultracode is invoked, Codex should always create a Codex goal whose
+objective begins with `Use $ultracode to ...`. That goal is the continuity
+mechanism: every continuation re-triggers the Ultracode skill, so the parent
+thread keeps integrating worker results, applying or recommending changes, and
+running final verification instead of stopping after the first summary.
+
+Keep the goal active until the top-level outcome is genuinely settled:
+synthesis is complete, any requested edits are integrated, failures or refuted
+findings have been handled, and the final checks have run or been explicitly
+reported as blocked. Only then should Codex clear the goal.
+
 ## What To Expect
 
 Ultracode work usually has three visible parts:
