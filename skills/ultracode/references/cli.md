@@ -100,7 +100,12 @@ Orchestration controls (all optional, all backward-compatible):
 - `budget_tokens`: best-effort total token budget — a pre-spawn gate checked when a worker is admitted, with
   usage accounted after each worker completes. New workers are skipped (and the cap logged) once exceeded, but
   with concurrency N up to N in-flight workers may still finish past the budget. A soft cap, not a hard
-  per-token kill switch. Default `null` (unbounded); shared across all spawns in the run.
+  per-token kill switch. Default `null` (unbounded); shared across all spawns in the run. Declarative
+  `steps[]` pipelines lift positive explicit budgets below `16_000_000` to that floor so synthesis and
+  terminal stages are not silently skipped. Set `strict_budget: true` to preserve an intentionally small
+  pipeline budget, or set `ULTRACODE_PIPELINE_BUDGET_FLOOR_TOKENS` (use `0` to disable the floor).
+- `strict_budget`: pipeline-only opt-out for the default budget floor; intended for deliberate bounded runs and
+  budget-gate tests.
 - `max_agents`: lifetime cap on spawned workers for the run (default 1000).
 
 Transient-retry knobs (retries fire **only** on classified transient errors — HTTP 429/5xx, rate-limit,

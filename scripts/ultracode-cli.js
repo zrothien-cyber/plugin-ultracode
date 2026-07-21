@@ -24,7 +24,7 @@ const NUMERIC_KEYS = new Set([
   "ui_port"
 ]);
 const JSON_KEYS = new Set(["workers_spec", "force_steps", "steps", "args"]);
-const BOOLEAN_KEYS = new Set(["ui", "retry_jitter", "transport_strict", "no_auto_update"]);
+const BOOLEAN_KEYS = new Set(["ui", "retry_jitter", "transport_strict", "strict_budget", "no_auto_update"]);
 // Switch flags that take no value — they must NOT consume the following token,
 // or a leading `--progress`/`--no-auto-update` would swallow the input positional.
 const ZERO_ARG_FLAGS = new Set(["progress", "no_ui", "no_auto_update", "no_cancel_on_sigint"]);

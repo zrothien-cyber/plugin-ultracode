@@ -7,6 +7,14 @@
     "url": "https://github.com/just-every/plugin-ultracode.git"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "build": "tsc --project tsconfig.build.json",
+    "pretest": "npm run build",
+    "test": "node --test \"test/**/*.test.js\"",
+    "pretypecheck": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.core.json"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2"
   }
 }

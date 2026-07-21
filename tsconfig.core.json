@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": false,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "useUnknownInCatchVariables": true
+  },
+  "include": ["src/**/*.ts"]
+}

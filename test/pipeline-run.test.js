@@ -74,6 +74,36 @@ test("2-step worker->worker DAG: dependent receives upstream output, record shap
   });
 });
 
+test("pipeline lifts undersized budgets unless strict_budget is requested", async () => {
+  await withCodexHome(async (home) => {
+    const baseInput = {
+      cwd: home,
+      codex_bin: MOCK,
+      codex_home: home,
+      budget_tokens: 600_000,
+      steps: [{ id: "check", prompt: "check the budget policy" }]
+    };
+
+    const lifted = await withCodexCliPath(MOCK, async () =>
+      withMockEnv({ MOCK_CODEX_RESPONSE: REVIEW_RESPONSE }, async () => runPipelineSpec(baseInput))
+    );
+    assert.strictEqual(lifted.status, "completed");
+    assert.strictEqual(lifted.options.budget_tokens, 16_000_000);
+    assert.strictEqual(lifted.options.budget_tokens_requested, 600_000);
+    assert.strictEqual(lifted.options.budget_floor_tokens, 16_000_000);
+
+    const strict = await withCodexCliPath(MOCK, async () =>
+      withMockEnv({ MOCK_CODEX_RESPONSE: REVIEW_RESPONSE }, async () =>
+        runPipelineSpec({ ...baseInput, strict_budget: true })
+      )
+    );
+    assert.strictEqual(strict.status, "completed");
+    assert.strictEqual(strict.options.budget_tokens, 600_000);
+    assert.strictEqual(strict.options.strict_budget, true);
+    assert.strictEqual(strict.options.budget_floor_tokens, undefined);
+  });
+});
+
 test("pipeline raw-text worker records expose result and value aliases", async () => {
   await withCodexHome(async (home) => {
     const wf = await withCodexCliPath(MOCK, async () =>
