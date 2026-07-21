@@ -1,13 +1,13 @@
 {
   "name": "ultracode",
-  "version": "0.3.0+codex.20260601143116",
+  "version": "0.3.0+codex.20260722010917",
   "description": "Fan out Codex subprocess workers for deep code investigation, planning, review, and edits — through one command that takes a task fan-out, a barrier-free steps[] DAG, an imperative Workflow script, or a saved workflow. Adds adversarial verification, budgets, journaled resume, a live run dashboard, pluggable transports (exec / app-server), warm-context resume, and transient-error retry.",
   "author": {
     "name": "Just Every",
     "url": "https://github.com/just-every"
   },
-  "homepage": "https://github.com/just-every/plugin-ultracode",
-  "repository": "https://github.com/just-every/plugin-ultracode",
+  "homepage": "https://github.com/zrothien-cyber/plugin-ultracode",
+  "repository": "https://github.com/zrothien-cyber/plugin-ultracode",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -34,7 +34,7 @@
     "displayName": "Ultracode",
     "shortDescription": "Run parallel Codex worker workflows",
     "longDescription": "Ultracode gives Codex a subprocess-backed workflow engine for parallel investigation, planning, verification, and edits. Workers run read-only by default, or writable in an isolated git worktree whose diff is collected back. There is one command: hand it a task sentence (fixed-role fan-out), a steps[] DAG (barrier-free), a workers_spec[] panel, an imperative Workflow script (with fanout()/dag() helpers), or a saved @workflow. A live React run dashboard streams every worker; it adds budgets, journaled resume, adversarial and perspective-diverse verification, warm-context resume, transient-error retry with backoff, and a pluggable transport (exec or app-server). Worker output returns to the parent thread, which synthesizes the evidence and integrates the result.",
-    "developerName": "Just Every",
+    "developerName": "zrothien-cyber",
     "category": "Developer Tools",
     "capabilities": [
       "Interactive",
@@ -49,6 +49,6 @@
     "brandColor": "#2563EB",
     "composerIcon": "./assets/icon.png",
     "logo": "./assets/icon.png",
-    "websiteURL": "https://github.com/just-every/plugin-ultracode"
+    "websiteURL": "https://github.com/zrothien-cyber/plugin-ultracode"
   }
 }

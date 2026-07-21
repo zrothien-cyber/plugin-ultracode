@@ -77,7 +77,7 @@ test("updatePlugin refreshes the marketplace snapshot before reinstalling Ultrac
   const result = await updatePlugin({
     manifest_path: manifestPath,
     codex_bin: MOCK_CODEX_PLUGIN,
-    marketplace: "just-every",
+    marketplace: "zrothien-cyber",
     cwd: dir,
     env: { ...process.env, MOCK_CODEX_PLUGIN_LOG: logPath }
   });
@@ -91,8 +91,8 @@ test("updatePlugin refreshes the marketplace snapshot before reinstalling Ultrac
 
   const entries = readLog(logPath);
   assert.deepStrictEqual(entries.map((entry) => entry.args), [
-    ["plugin", "marketplace", "upgrade", "just-every"],
-    ["plugin", "add", "ultracode@just-every"]
+    ["plugin", "marketplace", "upgrade", "zrothien-cyber"],
+    ["plugin", "add", "ultracode@zrothien-cyber"]
   ]);
 });
 
@@ -109,8 +109,8 @@ test("auto-update runs by default before a command, never changes its stdout, an
   assert.strictEqual(JSON.parse(first.stdout).kind, "workflow_definitions", "the command's stdout JSON is unchanged");
   assert.match(first.stderr, /auto-update/);
   assert.deepStrictEqual(readLog(logPath).map((entry) => entry.args), [
-    ["plugin", "marketplace", "upgrade", "just-every"],
-    ["plugin", "add", "ultracode@just-every"]
+    ["plugin", "marketplace", "upgrade", "zrothien-cyber"],
+    ["plugin", "add", "ultracode@zrothien-cyber"]
   ]);
 
   // Second run within the interval: throttled -> NO further update commands.

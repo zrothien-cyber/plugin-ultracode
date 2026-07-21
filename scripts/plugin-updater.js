@@ -4,7 +4,7 @@ const childProcess = require("child_process");
 const fs = require("fs/promises");
 const path = require("path");
 
-const DEFAULT_MARKETPLACE = "just-every";
+const DEFAULT_MARKETPLACE = "zrothien-cyber";
 
 function manifestPathFromHere() {
   return path.join(__dirname, "..", ".codex-plugin", "plugin.json");

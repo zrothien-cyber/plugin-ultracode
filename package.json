@@ -1,10 +1,10 @@
 {
-  "name": "@just-every/ultracode",
+  "name": "@zrothien-cyber/ultracode",
   "description": "Ultracode Codex plugin implementation.",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/just-every/plugin-ultracode.git"
+    "url": "https://github.com/zrothien-cyber/plugin-ultracode.git"
   },
   "scripts": {
     "build": "tsc --project tsconfig.build.json",

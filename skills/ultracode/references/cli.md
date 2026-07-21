@@ -64,7 +64,7 @@ installed cache for *future* Codex sessions; the current thread keeps the versio
 mutates the running command.
 
 - Opt out with `--no-auto-update` on any command, or `ULTRACODE_NO_AUTO_UPDATE=1` (or `ULTRACODE_AUTO_UPDATE=0`).
-- `marketplace`: marketplace name, default `just-every` (or `ULTRACODE_MARKETPLACE`).
+- `marketplace`: marketplace name, default `zrothien-cyber` (or `ULTRACODE_MARKETPLACE`).
 - `plugin`: plugin name, default from `.codex-plugin/plugin.json`.
 - `codex_bin`: Codex binary path (else `ULTRACODE_UPDATE_CODEX_BIN`, `CODEX_CLI_PATH`, or `codex`).
 
