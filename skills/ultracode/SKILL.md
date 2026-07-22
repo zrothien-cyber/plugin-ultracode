@@ -121,7 +121,8 @@ schemas, or no verification.
   with Codex goals".)
 - **Surface the dashboard.** Leave the run UI on; the moment `ui.ready` fires (or from the final `record.ui.url`)
   open the URL in the Codex in-app browser, else print it as a plain clickable link so the user can watch the run
-  live. (Mechanics and flags: `references/cli.md`.)
+  live. Never invoke an OS browser launcher (`open`, `xdg-open`, or equivalent): it must not open the user's
+  default external browser. (Mechanics and flags: `references/cli.md`.)
 
 ## Write the workflow
 
