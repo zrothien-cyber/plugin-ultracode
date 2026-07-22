@@ -1,0 +1,2 @@
+# TypeScript compiler output kept for the plugin runtime.
+scripts/*.js linguist-generated=true
