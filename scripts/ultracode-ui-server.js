@@ -374,6 +374,7 @@ async function handle(req, res) {
       codex_bin: body.codex_bin,
       codex_home: body.codex_home,
       concurrency: body.concurrency,
+      global_concurrency: body.global_concurrency === undefined ? body.globalConcurrency : body.global_concurrency,
       budget_tokens: body.budget_tokens,
       max_agents: body.max_agents,
       launch_stagger_ms: body.launch_stagger_ms,

@@ -33,9 +33,10 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.USAGE_KEYS = void 0;
+exports.DEFAULT_GLOBAL_CONCURRENCY = exports.USAGE_KEYS = void 0;
 exports.defaultConcurrency = defaultConcurrency;
 exports.normalizeConcurrency = normalizeConcurrency;
+exports.normalizeGlobalConcurrency = normalizeGlobalConcurrency;
 exports.createLimiter = createLimiter;
 exports.emitEvent = emitEvent;
 exports.log = log;
@@ -55,6 +56,7 @@ exports.USAGE_KEYS = [
     "output_tokens",
     "reasoning_output_tokens"
 ];
+exports.DEFAULT_GLOBAL_CONCURRENCY = 6;
 function isObject(value) {
     return value !== null && typeof value === "object";
 }
@@ -92,6 +94,11 @@ function defaultConcurrency() {
 function normalizeConcurrency(value) {
     if (value === undefined || value === null || value === "")
         return defaultConcurrency();
+    return Math.max(1, Math.min(16, Math.floor(Number(value)) || 1));
+}
+function normalizeGlobalConcurrency(value) {
+    if (value === undefined || value === null || value === "")
+        return exports.DEFAULT_GLOBAL_CONCURRENCY;
     return Math.max(1, Math.min(16, Math.floor(Number(value)) || 1));
 }
 function createLimiter(maxConcurrent) {
@@ -186,6 +193,7 @@ function sumUsageFromWorkers(workers) {
 }
 function createContext(opts = {}, defaults) {
     const concurrency = normalizeConcurrency(opts.concurrency);
+    const globalConcurrency = normalizeGlobalConcurrency(firstDefined(opts.globalConcurrency, opts.global_concurrency, process.env.ULTRACODE_GLOBAL_CONCURRENCY));
     const usageTotals = emptyUsage();
     const budgetTotal = opts.budgetTokens === undefined || opts.budgetTokens === null || opts.budgetTokens === ""
         ? null
@@ -199,6 +207,7 @@ function createContext(opts = {}, defaults) {
         workflowId: opts.workflowId || null,
         limiter: createLimiter(concurrency),
         concurrency,
+        globalConcurrency,
         usageTotals,
         events: [],
         spawnedCount: 0,

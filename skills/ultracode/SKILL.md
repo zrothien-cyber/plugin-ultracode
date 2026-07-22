@@ -110,10 +110,10 @@ schemas, or no verification.
 - Keep workers **read-only** (`sandbox: read-only`, the default) unless the user explicitly wants writable child
   runs. For parallel writers you **must** use `isolation: "worktree"`, or their diffs collide in one cwd.
 - Treat worker failures as **real failures**. A failed, timed-out, or refuted worker resolves to `null` / a
-  `{status:"failed"}` record — filter it out; never substitute guessed output for it. A timed-out worker (default
-  20 min) is **not** retried — transient-error retries are opt-in via `max_retries` (default `0`) and never cover
-  a timeout — so don't set a tight `timeout_ms` for deep work, and read a thin result set as evidence of failures,
-  not of a clean codebase.
+  `{status:"failed"}` record — filter it out; never substitute guessed output for it. A running worker that reaches
+  its normal timeout (default 20 min) is **not** retried. The narrow exception is a child that emits no JSONL output
+  during the startup guard: Ultracode stops it early and gives it one automatic fresh-process retry. Read a thin
+  result set as evidence of failures, not of a clean codebase.
 - **Always use a Codex goal when Ultracode is invoked**, prefixing the objective with `Use $ultracode to ...` so
   every continuation re-triggers this skill. This goal is the mechanism that keeps multi-turn Ultracode work on
   track: it guards against ending after the worker summary but before synthesis, edits, integration, and final

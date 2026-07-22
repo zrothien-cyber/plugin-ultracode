@@ -35,6 +35,16 @@ test("timed_out is treated as permanent (a retry would re-burn the timeout)", ()
   assert.match(c.reason, /timed out/);
 });
 
+test("a zero-output startup timeout gets one implicit restart", () => {
+  const c = classifyCodexError(
+    new Error("startup timeout"),
+    execOf({ timed_out: true, startup_timed_out: true, received_output: false, exit_code: null })
+  );
+  assert.strictEqual(c.transient, true);
+  assert.strictEqual(c.defaultMaxRetries, 1);
+  assert.match(c.reason, /startup/i);
+});
+
 test("retryable patterns (429 / 5xx / rate-limit / network errno) are transient", () => {
   const cases = [
     "HTTP 429 rate limit exceeded",

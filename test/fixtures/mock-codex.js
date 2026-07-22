@@ -44,6 +44,11 @@
 //                         file) exit non-zero (with MOCK_CODEX_STDERR), and the
 //                         (N+1)th and beyond succeed. Drives transient
 //                         retry-then-succeed tests deterministically.
+//   MOCK_CODEX_SILENT_START_MS  hold the first N configured invocations before
+//                         writing any stdout, to simulate a child that never
+//                         starts its JSONL stream.
+//   MOCK_CODEX_SILENT_START_TIMES  number of initial invocations affected by
+//                         MOCK_CODEX_SILENT_START_MS.
 //   MOCK_CODEX_SIGTERM_MARKER  path the SIGTERM handler writes before exiting,
 //                         so a cancellation test can assert the child actually
 //                         received SIGTERM (the engine's kill ladder).
@@ -380,6 +385,12 @@ async function main() {
   });
 
   const invocation = nextInvocation();
+
+  const silentStartMs = Number(process.env.MOCK_CODEX_SILENT_START_MS || 0);
+  const silentStartTimes = Number(process.env.MOCK_CODEX_SILENT_START_TIMES || 0);
+  if (Number.isFinite(silentStartMs) && silentStartMs > 0 && Number.isFinite(silentStartTimes) && invocation < silentStartTimes) {
+    await sleep(silentStartMs);
+  }
 
   // -------------------------------------------------------------------------
   // Warm-context: `exec resume` subcommand.

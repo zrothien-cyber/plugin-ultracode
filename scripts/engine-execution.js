@@ -8,8 +8,10 @@ const path = require("path");
 const util = require("util");
 
 const appServerClient = require("./app-server-client");
+const { acquireGlobalLease } = require("./global-concurrency");
 
 const execFileP = util.promisify(childProcess.execFile);
+const DEFAULT_STARTUP_TIMEOUT_MS = 120_000;
 
 // Worker transports and orchestration primitives. Dependencies flow from foundation.
 /**
@@ -40,7 +42,8 @@ module.exports = function createExecution(foundation) {
     firstDefined,
     clampNonNegInt,
     resolveBool,
-    resolveTransport
+    resolveTransport,
+    normalizeGlobalConcurrency
   } = foundation;
 
 function notifyCtxWorkerHook(ctx, hookName, ...args) {
@@ -72,6 +75,7 @@ function createWorkerMeta(ctx, prompt, opts) {
       model: opts.model || null,
       reasoning_effort: opts.reasoningEffort || null,
       timeout_ms: opts.timeoutMs,
+      startup_timeout_ms: opts.startupTimeoutMs,
       cwd: opts.cwd,
       isolation: opts.isolation || null,
       executor: opts.executor || "cold",
@@ -189,7 +193,7 @@ function parseUsage(stdout) {
   return latest;
 }
 
-function spawnCodex({ bin, args, cwd, env, prompt, timeoutMs, onStreamEvent, signal }) {
+function spawnCodex({ bin, args, cwd, env, prompt, timeoutMs, startupTimeoutMs, onStreamEvent, signal }) {
   return new Promise((resolve, reject) => {
     // Abort before spawning: never create a child for an already-cancelled run.
     if (signal && signal.aborted) {
@@ -204,25 +208,53 @@ function spawnCodex({ bin, args, cwd, env, prompt, timeoutMs, onStreamEvent, sig
     let lastUsage = null;
     let settled = false;
     let timedOut = false;
+    let startupTimedOut = false;
+    let receivedOutput = false;
     let cancelled = false;
     let killTimer = null;
     let abortListener = null;
+    let startupTimer = null;
     const child = childProcess.spawn(bin, args, {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"]
     });
-    const timer = setTimeout(() => {
-      if (!settled) {
-        timedOut = true;
+    const terminate = () => {
+      if (settled) return;
+      try {
         child.kill("SIGTERM");
+      } catch {
+        /* child may already be gone */
+      }
+      if (!killTimer) {
         killTimer = setTimeout(() => {
           if (!settled) {
-            child.kill("SIGKILL");
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              /* child may already be gone */
+            }
           }
         }, 5_000);
       }
+    };
+    const timer = setTimeout(() => {
+      if (!settled) {
+        timedOut = true;
+        terminate();
+      }
     }, timeoutMs);
+    const effectiveStartupTimeoutMs = Math.max(
+      1,
+      Math.min(timeoutMs, Math.floor(Number(startupTimeoutMs)) || timeoutMs)
+    );
+    startupTimer = setTimeout(() => {
+      if (!settled && !receivedOutput && !threadId) {
+        startupTimedOut = true;
+        timedOut = true;
+        terminate();
+      }
+    }, effectiveStartupTimeoutMs);
 
     // Cancellation: reuse the proven timeout kill ladder (SIGTERM -> 5s ->
     // SIGKILL). The child's natural close/error path then settles via finish(),
@@ -232,22 +264,7 @@ function spawnCodex({ bin, args, cwd, env, prompt, timeoutMs, onStreamEvent, sig
       abortListener = () => {
         if (settled) return;
         cancelled = true;
-        try {
-          child.kill("SIGTERM");
-        } catch {
-          /* child may already be gone */
-        }
-        if (!killTimer) {
-          killTimer = setTimeout(() => {
-            if (!settled) {
-              try {
-                child.kill("SIGKILL");
-              } catch {
-                /* already gone */
-              }
-            }
-          }, 5_000);
-        }
+        terminate();
       };
       signal.addEventListener("abort", abortListener, { once: true });
     }
@@ -275,6 +292,11 @@ function spawnCodex({ bin, args, cwd, env, prompt, timeoutMs, onStreamEvent, sig
     }
 
     function handleStdout(text) {
+      if (text.length > 0 && !receivedOutput) {
+        receivedOutput = true;
+        if (startupTimer) clearTimeout(startupTimer);
+        startupTimer = null;
+      }
       stdout += text;
       lineBuf += text;
       let newline;
@@ -297,6 +319,7 @@ function spawnCodex({ bin, args, cwd, env, prompt, timeoutMs, onStreamEvent, sig
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (startupTimer) clearTimeout(startupTimer);
       if (killTimer) clearTimeout(killTimer);
       if (signal && abortListener) signal.removeEventListener("abort", abortListener);
       const result = {
@@ -304,6 +327,8 @@ function spawnCodex({ bin, args, cwd, env, prompt, timeoutMs, onStreamEvent, sig
         exit_code: code,
         signal: exitSignal,
         timed_out: timedOut,
+        startup_timed_out: startupTimedOut,
+        received_output: receivedOutput,
         cancelled,
         duration_ms: Date.now() - startedAt,
         thread_id: threadId,
@@ -332,7 +357,10 @@ function spawnCodex({ bin, args, cwd, env, prompt, timeoutMs, onStreamEvent, sig
         return;
       }
       if (timedOut) {
-        finish(new Error(`Codex worker timed out after ${timeoutMs}ms.`), code, exitSignal);
+        const message = startupTimedOut
+          ? `Codex worker did not start or emit output within ${effectiveStartupTimeoutMs}ms.`
+          : `Codex worker timed out after ${timeoutMs}ms.`;
+        finish(new Error(message), code, exitSignal);
         return;
       }
       if (code !== 0) {
@@ -376,11 +404,30 @@ function resolveWorkerOpts(opts = {}) {
   // by default) controls whether an app-server failure falls back to exec.
   const transport = resolveTransport(firstDefined(opts.transport, process.env.ULTRACODE_TRANSPORT));
   const transportStrict = resolveBool(firstDefined(opts.transport_strict, opts.transportStrict), false);
+  const timeoutMs = opts.timeoutMs || opts.timeout_ms || DEFAULT_TIMEOUT_MS;
+  const configuredStartupTimeoutMs = firstDefined(
+    opts.startupTimeoutMs,
+    opts.startup_timeout_ms,
+    process.env.ULTRACODE_STARTUP_TIMEOUT_MS
+  );
+  const startupTimeoutMs = Math.max(
+    1,
+    Math.min(
+      timeoutMs,
+      Math.floor(Number(configuredStartupTimeoutMs)) > 0
+        ? Math.floor(Number(configuredStartupTimeoutMs))
+        : DEFAULT_STARTUP_TIMEOUT_MS
+    )
+  );
   return {
     sandbox,
     model: resolveModel(opts.model),
     reasoningEffort,
-    timeoutMs: opts.timeoutMs || opts.timeout_ms || DEFAULT_TIMEOUT_MS,
+    timeoutMs,
+    startupTimeoutMs,
+    globalConcurrency: normalizeGlobalConcurrency(
+      firstDefined(opts.globalConcurrency, opts.global_concurrency, process.env.ULTRACODE_GLOBAL_CONCURRENCY)
+    ),
     cwd: path.resolve(opts.cwd || process.cwd()),
     bin: opts.codex_bin || defaultCodexBin(),
     codex_home: opts.codex_home || codexHome(),
@@ -541,6 +588,7 @@ async function runCodexAttempt({ prompt, schema, opts, onStreamEvent, resumeSess
       env,
       prompt,
       timeoutMs: opts.timeoutMs,
+      startupTimeoutMs: opts.startupTimeoutMs,
       onStreamEvent,
       signal: opts.signal
     });
@@ -722,9 +770,45 @@ async function spawnWorkerGuarded(prompt, opts, ctx, resumeSessionId = null) {
       }
       const postStaggerGate = capExceeded();
       if (postStaggerGate) return postStaggerGate;
-      if (ctx) ctx.spawnedCount += 1;
       let attemptResult;
+      let globalLease = null;
       try {
+        const globalConcurrency = ctx ? ctx.globalConcurrency : runOpts.globalConcurrency;
+        globalLease = await acquireGlobalLease({
+          codexHome: runOpts.codex_home,
+          limit: globalConcurrency,
+          signal: ctx ? ctx.signal : undefined,
+          onWait: ({ active, limit }) => {
+            emitEvent(ctx, workerEvent({ type: "worker.global_wait", label, phase, active, limit }));
+            log(ctx, `Worker "${label}" waiting for a global concurrency slot (${active}/${limit}).`, {
+              label,
+              reason: "global-concurrency",
+              active,
+              global_concurrency: limit
+            });
+          }
+        });
+        if (globalLease.waited_ms > 0) {
+          emitEvent(
+            ctx,
+            workerEvent({
+              type: "worker.global_acquired",
+              label,
+              phase,
+              wait_ms: globalLease.waited_ms,
+              active: globalLease.active,
+              limit: globalLease.limit
+            })
+          );
+        }
+        if (ctx && ctx.signal && ctx.signal.aborted) {
+          emitEvent(ctx, workerEvent({ type: "worker.cancelled", label, phase }));
+          log(ctx, `Worker "${label}" cancelled while waiting for global concurrency.`, { label, reason: "cancelled" });
+          return cancelledWorker(label, phase, "cancelled");
+        }
+        const postAdmissionGate = capExceeded();
+        if (postAdmissionGate) return postAdmissionGate;
+        if (ctx) ctx.spawnedCount += 1;
         attemptResult = await runCodexAttempt({
           prompt: currentPrompt,
           schema: opts.schema,
@@ -822,6 +906,8 @@ async function spawnWorkerGuarded(prompt, opts, ctx, resumeSessionId = null) {
         emitEvent(ctx, workerEvent({ type: "worker.failed", label, phase, error: error.message }));
         log(ctx, `Worker "${label}" failed: ${error.message}`, { label, reason: "exec-error" });
         return failedWorker(label, phase, error.message, execResult, usage, execResult ? execResult.duration_ms : 0);
+      } finally {
+        if (globalLease) await globalLease.release().catch(() => {});
       }
 
       const { execResult, value } = attemptResult;

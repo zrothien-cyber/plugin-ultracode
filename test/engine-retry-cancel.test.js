@@ -109,6 +109,37 @@ test("transient auth-refresh error restarts once even when maxRetries is unset",
   assert.match(retries[0].reason, /auth refresh/);
 });
 
+test("silent startup is terminated early and retried once without an explicit retry budget", async () => {
+  const counter = freshCounterPath();
+  const events = [];
+  const ctx = createContext({ concurrency: 1, onEvent: (e) => events.push(e) });
+  const startedAt = Date.now();
+  const r = await withMockEnv(
+    {
+      MOCK_CODEX_SILENT_START_MS: "500",
+      MOCK_CODEX_SILENT_START_TIMES: "1",
+      MOCK_CODEX_COUNTER: counter
+    },
+    async () =>
+      spawnWorker("prompt", {
+        ...mockOpts({ timeoutMs: 1_500 }),
+        ctx,
+        startupTimeoutMs: 80,
+        baseDelayMs: 1,
+        maxDelayMs: 1,
+        retryJitter: false
+      })
+  );
+
+  assert.strictEqual(r.status, "completed", r.error);
+  assert.strictEqual(parseInt(fs.readFileSync(counter, "utf8"), 10), 2, "first silent child plus one restart");
+  assert.ok(Date.now() - startedAt < 1_000, "startup guard avoids waiting for the full worker timeout");
+  const retries = events.filter((e) => e.type === "worker.retry");
+  assert.strictEqual(retries.length, 1);
+  assert.strictEqual(retries[0].max_retries, 1);
+  assert.match(retries[0].reason, /startup/i);
+});
+
 test("default no-op: maxRetries unset, generic stderr => failed after ONE invocation", async () => {
   const counter = freshCounterPath();
   const events = [];

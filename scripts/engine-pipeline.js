@@ -602,6 +602,7 @@ async function runPipelineSpec(input = {}) {
   const ctx = createContext({
     workflowId: id,
     concurrency: input.concurrency,
+    globalConcurrency: firstDefined(input.global_concurrency, input.globalConcurrency),
     budgetTokens: budgetPolicy.effective,
     maxAgents: input.max_agents,
     launchStaggerMs: input.launch_stagger_ms,
@@ -649,6 +650,7 @@ async function runPipelineSpec(input = {}) {
       model: defaults.model || null,
       reasoning_effort: baseEffort || null,
       concurrency: ctx.concurrency,
+      global_concurrency: ctx.globalConcurrency,
       budget_tokens: ctx.budget.total,
       ...(budgetPolicy.floor === null
         ? {}

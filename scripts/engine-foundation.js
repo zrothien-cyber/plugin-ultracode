@@ -292,8 +292,10 @@ async function readWorkflow(input = {}) {
 // ---------------------------------------------------------------------------
 
 const {
+  DEFAULT_GLOBAL_CONCURRENCY,
   defaultConcurrency,
   normalizeConcurrency,
+  normalizeGlobalConcurrency,
   createLimiter,
   emitEvent,
   log,
@@ -358,6 +360,12 @@ function classifyCodexError(error, execResult) {
     return { transient: true, reason: `spawn ${code}` };
   }
   const exec = execResult || (error && error.codex_exec) || null;
+  // A child that never emitted a byte of its JSONL stream never reached useful
+  // work. It is terminated by the short startup guard, then gets one implicit
+  // fresh-process retry; completed work that times out remains non-retryable.
+  if (exec && exec.startup_timed_out === true) {
+    return { transient: true, reason: "startup timed out with no output", defaultMaxRetries: 1 };
+  }
   // A timeout is treated as permanent: a retry would just re-burn the full
   // wall-clock timeout, multiplying cost for no benefit.
   if (exec && exec.timed_out === true) {
@@ -499,6 +507,7 @@ function resolveTransport(value) {
     DEFAULT_MAX_AGENTS,
     MAX_NESTING_DEPTH,
     DEFAULT_LAUNCH_STAGGER_MS,
+    DEFAULT_GLOBAL_CONCURRENCY,
     VALID_SANDBOXES,
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
@@ -527,6 +536,7 @@ function resolveTransport(value) {
     readWorkflow,
     defaultConcurrency,
     normalizeConcurrency,
+    normalizeGlobalConcurrency,
     createLimiter,
     emitEvent,
     log,

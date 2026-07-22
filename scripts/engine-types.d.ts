@@ -13,6 +13,7 @@ export interface Foundation {
   DEFAULT_MAX_AGENTS: number;
   MAX_NESTING_DEPTH: number;
   DEFAULT_LAUNCH_STAGGER_MS: number;
+  DEFAULT_GLOBAL_CONCURRENCY: number;
   DEFAULT_MODEL: string;
   DEFAULT_REASONING_EFFORT: string;
   GPT_5_6_MODELS: readonly string[];
@@ -42,6 +43,7 @@ export interface Foundation {
   readWorkflow: AnyFunction;
   defaultConcurrency: AnyFunction;
   normalizeConcurrency: AnyFunction;
+  normalizeGlobalConcurrency: AnyFunction;
   createLimiter: AnyFunction;
   emitEvent: AnyFunction;
   log: AnyFunction;

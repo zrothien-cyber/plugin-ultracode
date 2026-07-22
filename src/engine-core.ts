@@ -22,6 +22,8 @@ export type EventRecord = Record<string, unknown>;
 export type EventHandler = (event: EventRecord) => unknown;
 export type WorkerHook = (...args: unknown[]) => unknown;
 
+export const DEFAULT_GLOBAL_CONCURRENCY = 6;
+
 export interface Limiter {
   run<T>(thunk: () => T | PromiseLike<T>): Promise<T>;
   active(): number;
@@ -32,6 +34,8 @@ export interface Limiter {
 export interface ContextOptions {
   workflowId?: unknown;
   concurrency?: unknown;
+  globalConcurrency?: unknown;
+  global_concurrency?: unknown;
   budgetTokens?: unknown;
   maxAgents?: unknown;
   launchStaggerMs?: unknown;
@@ -54,6 +58,7 @@ export interface RunContext {
   workflowId: unknown;
   limiter: Limiter;
   concurrency: number;
+  globalConcurrency: number;
   usageTotals: Usage;
   events: EventRecord[];
   spawnedCount: number;
@@ -133,6 +138,11 @@ export function defaultConcurrency(): number {
 
 export function normalizeConcurrency(value: unknown): number {
   if (value === undefined || value === null || value === "") return defaultConcurrency();
+  return Math.max(1, Math.min(16, Math.floor(Number(value)) || 1));
+}
+
+export function normalizeGlobalConcurrency(value: unknown): number {
+  if (value === undefined || value === null || value === "") return DEFAULT_GLOBAL_CONCURRENCY;
   return Math.max(1, Math.min(16, Math.floor(Number(value)) || 1));
 }
 
@@ -234,6 +244,9 @@ export function sumUsageFromWorkers(workers: unknown): Usage {
 
 export function createContext(opts: ContextOptions = {}, defaults: ContextDefaults): RunContext {
   const concurrency = normalizeConcurrency(opts.concurrency);
+  const globalConcurrency = normalizeGlobalConcurrency(
+    firstDefined(opts.globalConcurrency, opts.global_concurrency, process.env.ULTRACODE_GLOBAL_CONCURRENCY)
+  );
   const usageTotals = emptyUsage();
   const budgetTotal =
     opts.budgetTokens === undefined || opts.budgetTokens === null || opts.budgetTokens === ""
@@ -251,6 +264,7 @@ export function createContext(opts: ContextOptions = {}, defaults: ContextDefaul
     workflowId: opts.workflowId || null,
     limiter: createLimiter(concurrency),
     concurrency,
+    globalConcurrency,
     usageTotals,
     events: [],
     spawnedCount: 0,

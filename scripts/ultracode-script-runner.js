@@ -481,6 +481,7 @@ function buildScope(ctx, input, hooks = {}) {
       args: workflowArgs,
       cwd: input.cwd,
       concurrency: input.concurrency,
+      global_concurrency: input.global_concurrency === undefined ? input.globalConcurrency : input.global_concurrency,
       budget_tokens: input.budget_tokens,
       max_agents: input.max_agents,
       launch_stagger_ms: input.launch_stagger_ms,
@@ -612,6 +613,7 @@ async function runScript(input = {}) {
   ctx = engine.createContext({
     workflowId: id,
     concurrency: input.concurrency,
+    globalConcurrency: input.global_concurrency === undefined ? input.globalConcurrency : input.global_concurrency,
     budgetTokens: input.budget_tokens,
     maxAgents: input.max_agents,
     launchStaggerMs: input.launch_stagger_ms,
@@ -661,6 +663,7 @@ async function runScript(input = {}) {
     cwd,
     options: {
       concurrency: ctx.concurrency,
+      global_concurrency: ctx.globalConcurrency,
       budget_tokens: ctx.budget.total,
       max_agents: ctx.maxAgents,
       launch_stagger_ms: ctx.launchStaggerMs,

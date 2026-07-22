@@ -88,13 +88,18 @@ Fans out the built-in fixed reviewer roles in parallel and returns structured fi
 - `sandbox`: default `read-only`. Use `workspace-write` or `danger-full-access` only when the user explicitly
   wants child workers to modify files.
 - `timeout_ms`: per-worker timeout (default 1,200,000 = 20 min; min 1000). The kill ladder is SIGTERM then
-  SIGKILL after 5s.
+  SIGKILL after 5s. A child that has emitted no JSONL output by the startup guard (default 120,000ms, configurable
+  with `ULTRACODE_STARTUP_TIMEOUT_MS`) is stopped early and gets one automatic fresh-process retry; a normal
+  running-worker timeout is still not retried.
 - `codex_bin`: optional Codex binary path (else `CODEX_CLI_PATH`, else app-bundle candidates / bare `codex`).
 - `codex_home`: optional `CODEX_HOME` for child workers (else inherited; defaults to `~/.codex`).
 
 Orchestration controls (all optional, all backward-compatible):
 
 - `concurrency`: max simultaneous Codex subprocesses. Defaults to `min(16, cores-2)`.
+- `global_concurrency`: total simultaneous Codex subprocesses across all Ultracode tasks sharing a `CODEX_HOME`.
+  Defaults to `6`; pass `--global-concurrency N` or set `ULTRACODE_GLOBAL_CONCURRENCY`. Workers waiting for this
+  shared slot are journaled so the dashboard and `--progress` output distinguish queueing from a stalled worker.
 - `launch_stagger_ms`: tiny per-workflow delay between simultaneous subprocess starts. Default `25`, override with
   `ULTRACODE_LAUNCH_STAGGER_MS`, or set `0` to disable.
 - `budget_tokens`: best-effort total token budget — a pre-spawn gate checked when a worker is admitted, with
@@ -109,13 +114,14 @@ Orchestration controls (all optional, all backward-compatible):
 - `max_agents`: lifetime cap on spawned workers for the run (default 1000).
 
 Transient-retry knobs (retries fire **only** on classified transient errors — HTTP 429/5xx, rate-limit,
-network errno, or transient auth-refresh races — never on login-required/bad-credential/bad-flag/schema/timeout/unknown failures):
+network errno, or transient auth-refresh races — never on login-required/bad-credential/bad-flag/schema/normal timeout/unknown failures):
 
 - `max_retries`: per-worker transient retries. Default `0` (byte-identical to the pre-retry engine).
 - `base_delay_ms`: base backoff delay. Default `500`.
 - `max_delay_ms`: backoff cap. Default `30000`.
 - `retry_jitter`: full-jitter in `[0, min(max, base*2^attempt)]`. Default `true`.
 - Transient auth-refresh races get one implicit restart even when `max_retries` is `0`.
+- A zero-output startup timeout also gets one implicit restart even when `max_retries` is `0`.
 
 Schema-mismatch retries are a separate counter (default `1` when a schema is set, else `0`) and never consume
 the transient-retry budget.
@@ -149,7 +155,7 @@ is validated **before any spawn** — duplicate id, unknown/self dependency, and
 effects.
 
 Top-level args mirror the fan-out orchestration controls — `cwd`, `sandbox`, `model`, `reasoning_effort`,
-`timeout_ms`, `codex_bin`, `codex_home`, `concurrency`, `launch_stagger_ms`, `budget_tokens`, `max_agents`, the retry knobs,
+`timeout_ms`, `codex_bin`, `codex_home`, `concurrency`, `global_concurrency`, `launch_stagger_ms`, `budget_tokens`, `max_agents`, the retry knobs,
 `transport`, `transport_strict`, and an optional descriptive `task` — plus:
 
 - `steps` (required): array of step objects (at least one).

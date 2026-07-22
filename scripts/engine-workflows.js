@@ -310,6 +310,7 @@ async function runExplicitWorkflow(input) {
   const ctx = createContext({
     workflowId: id,
     concurrency: input.concurrency,
+    globalConcurrency: firstDefined(input.global_concurrency, input.globalConcurrency),
     budgetTokens: input.budget_tokens,
     maxAgents: input.max_agents,
     launchStaggerMs: input.launch_stagger_ms,
@@ -342,6 +343,7 @@ async function runExplicitWorkflow(input) {
       model: defaults.model || null,
       reasoning_effort: baseEffort || null,
       concurrency: ctx.concurrency,
+      global_concurrency: ctx.globalConcurrency,
       budget_tokens: ctx.budget.total,
       max_agents: ctx.maxAgents,
       launch_stagger_ms: ctx.launchStaggerMs,
@@ -431,6 +433,7 @@ async function runWorkflow(input = {}) {
   const ctx = createContext({
     workflowId: id,
     concurrency: input.concurrency,
+    globalConcurrency: firstDefined(input.global_concurrency, input.globalConcurrency),
     budgetTokens: input.budget_tokens,
     maxAgents: input.max_agents,
     launchStaggerMs: input.launch_stagger_ms,
@@ -457,6 +460,7 @@ async function runWorkflow(input = {}) {
       model: options.model || null,
       reasoning_effort: options.reasoning_effort || null,
       concurrency: ctx.concurrency,
+      global_concurrency: ctx.globalConcurrency,
       budget_tokens: ctx.budget.total,
       max_agents: ctx.maxAgents,
       launch_stagger_ms: ctx.launchStaggerMs,
@@ -522,6 +526,11 @@ async function resumeWorkflow(input = {}) {
   const ctx = createContext({
     workflowId: record.id,
     concurrency: record.options && record.options.concurrency,
+    globalConcurrency: firstDefined(
+      input.global_concurrency,
+      input.globalConcurrency,
+      record.options && record.options.global_concurrency
+    ),
     budgetTokens: record.options && record.options.budget_tokens,
     maxAgents: record.options && record.options.max_agents,
     launchStaggerMs: firstDefined(input.launch_stagger_ms, record.options && record.options.launch_stagger_ms),
@@ -547,7 +556,11 @@ async function resumeWorkflow(input = {}) {
   record.status = "running";
   record.completed_at = null;
   record.resumed_at = new Date().toISOString();
-  record.options = { ...(record.options || {}), ui: shouldLaunchUi(input) };
+  record.options = {
+    ...(record.options || {}),
+    global_concurrency: ctx.globalConcurrency,
+    ui: shouldLaunchUi(input)
+  };
   record.events = ctx.events;
   if (rerun.length === 0) {
     log(ctx, "resume: all steps already completed; nothing to re-run.");

@@ -34,12 +34,13 @@ test("CLI --steps parses JSON, runs the DAG, prints the record", async () => {
     { id: "b", prompt: "step b using {{steps.a.summary}}", depends_on: ["a"] }
   ]);
   const { code, stdout, stderr } = await runCli(
-    ["--steps", steps, "--name", "Plan UI Orb", "--cwd", home, "--codex-bin", MOCK, "--codex-home", home, "--concurrency", "2", "--progress"],
+    ["--steps", steps, "--name", "Plan UI Orb", "--cwd", home, "--codex-bin", MOCK, "--codex-home", home, "--concurrency", "2", "--global-concurrency", "1", "--progress"],
     { CODEX_HOME: home, CODEX_CLI_PATH: MOCK }
   );
   assert.strictEqual(code, 0, `cli exited 0 (stderr: ${stderr})`);
   const record = JSON.parse(stdout);
   assert.strictEqual(record.name, "Plan UI Orb");
+  assert.strictEqual(record.options.global_concurrency, 1);
   assert.strictEqual(record.slug, "plan-ui-orb");
   assert.match(record.id, /-plan-ui-orb$/);
   assert.strictEqual(record.options.pipeline, true);

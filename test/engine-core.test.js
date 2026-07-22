@@ -11,6 +11,7 @@ test("foundation delegates stable runtime primitives to the compiled TS core", (
   for (const name of [
     "defaultConcurrency",
     "normalizeConcurrency",
+    "normalizeGlobalConcurrency",
     "createLimiter",
     "emitEvent",
     "log",
@@ -26,7 +27,8 @@ test("foundation delegates stable runtime primitives to the compiled TS core", (
   }
   assert.strictEqual(foundation.USAGE_KEYS, core.USAGE_KEYS);
 
-  const context = foundation.createContext({ concurrency: 2, budgetTokens: 20 });
+  const context = foundation.createContext({ concurrency: 2, globalConcurrency: 3, budgetTokens: 20 });
   assert.strictEqual(context.concurrency, 2);
+  assert.strictEqual(context.globalConcurrency, 3);
   assert.strictEqual(context.budget.remaining(), 20);
 });

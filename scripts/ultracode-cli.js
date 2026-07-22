@@ -15,6 +15,7 @@ const NUMERIC_KEYS = new Set([
   "workers",
   "timeout_ms",
   "concurrency",
+  "global_concurrency",
   "budget_tokens",
   "max_agents",
   "launch_stagger_ms",
