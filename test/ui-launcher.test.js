@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
+const http = require("node:http");
 const path = require("path");
 
 const { engine, MOCK, freshTmpDir, withCodexHome } = require("./helpers/env.js");
@@ -71,6 +72,52 @@ test("shouldLaunchUi only defaults on when explicitly enabled by input or env", 
   } finally {
     if (previous === undefined) delete process.env.ULTRACODE_UI;
     else process.env.ULTRACODE_UI = previous;
+  }
+});
+
+test("ensureUiServer replaces a healthy server whose UI assets belong to an old plugin cache", async () => {
+  const runsDir = freshTmpDir("ultracode-ui-old-cache-");
+  const metaPath = metadataPathForRunsDir(runsDir);
+  const stale = http.createServer((req, res) => {
+    if (req.url === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    res.writeHead(404);
+    res.end("Not found\n");
+  });
+  let serverPid = null;
+  try {
+    await new Promise((resolve) => stale.listen(0, "127.0.0.1", resolve));
+    const address = stale.address();
+    const staleUrl = `http://127.0.0.1:${address.port}`;
+    fs.mkdirSync(path.dirname(metaPath), { recursive: true });
+    fs.writeFileSync(
+      metaPath,
+      `${JSON.stringify({
+        pid: process.pid,
+        url: staleUrl,
+        runs_dir: runsDir,
+        static_dir: path.join(runsDir, "removed-plugin-ui")
+      })}\n`
+    );
+
+    const server = await ensureUiServer(runsDir, { ui_port: 0 });
+    serverPid = server.pid;
+    assert.notStrictEqual(server.url, staleUrl, "stale server is not reused");
+
+    const page = await fetch(`${server.url}/workflow/dashboard-smoke`);
+    assert.strictEqual(page.status, 200);
+    assert.match(await page.text(), /Ultracode Run/);
+
+    const metadata = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    assert.strictEqual(metadata.pid, server.pid);
+    assert.strictEqual(metadata.static_dir, path.join(__dirname, "..", "ui"));
+  } finally {
+    await stopServer(serverPid);
+    await new Promise((resolve) => stale.close(resolve));
+    fs.rmSync(runsDir, { recursive: true, force: true });
   }
 });
 

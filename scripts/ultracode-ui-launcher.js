@@ -7,6 +7,7 @@ const path = require("path");
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_WAIT_MS = 2500;
+const STATIC_DIR = path.resolve(__dirname, "..", "ui");
 
 function parseBool(value) {
   if (value === undefined || value === null) return undefined;
@@ -67,6 +68,14 @@ function requestHealth(url) {
 async function healthyMetadata(metaPath, runsDir) {
   const meta = await readMetadata(metaPath);
   if (!meta || meta.runs_dir !== runsDir || typeof meta.url !== "string") return null;
+  // A plugin upgrade replaces its cache directory. A still-running server from
+  // the old cache can answer /api/health while its UI files no longer exist.
+  if (typeof meta.static_dir !== "string" || path.resolve(meta.static_dir) !== STATIC_DIR) return null;
+  try {
+    await fs.access(path.join(STATIC_DIR, "index.html"));
+  } catch {
+    return null;
+  }
   return (await requestHealth(meta.url)) ? meta : null;
 }
 
