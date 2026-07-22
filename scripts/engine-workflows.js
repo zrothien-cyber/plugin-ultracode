@@ -6,6 +6,7 @@ const path = require("path");
 const { workflowIdentity } = require("./run-identity");
 const { controllerSnapshot, refreshControllerHeartbeat } = require("./run-lifecycle");
 const { attachWorkflowUi, shouldLaunchUi } = require("./ultracode-ui-launcher");
+const { terminalWorkflowEvent } = require("./workflow-events");
 
 // Workflow journal construction, persistence, resume, and fixed-role execution.
 /**
@@ -30,6 +31,7 @@ module.exports = function createWorkflows(foundation, execution) {
     stepId,
     createContext,
     sumUsageFromWorkers,
+    emitEvent,
     log,
     defaultCodexBin,
     codexHome,
@@ -240,6 +242,7 @@ function finalizeRecord(workflow, ctx) {
   workflow.aggregate_usage = sumUsageFromWorkers(workflow.workers);
   workflow.events = ctx.events;
   workflow.aggregate = compactWorkflow(workflow);
+  emitEvent(ctx, terminalWorkflowEvent(workflow));
 }
 
 function normalizeSpec(spec, index, defaults) {

@@ -77,6 +77,9 @@ test("runScript: top-level return is captured as result and top-level await work
   });
   assert.strictEqual(rec.status, "completed");
   assert.deepStrictEqual(rec.result, { answer: 42 });
+  const terminal = rec.events.at(-1);
+  assert.strictEqual(terminal.type, "workflow.completed", "script records end with a workflow terminal event");
+  assert.strictEqual(terminal.status, "completed");
 });
 
 test("runScript: no return yields result null (undefined -> null)", async () => {
@@ -96,6 +99,7 @@ test("runScript: a throwing script journals status:failed with the message and p
   assert.strictEqual(rec.status, "failed");
   assert.match(rec.error, /kaboom/);
   assert.ok(Array.isArray(rec.events) && rec.events.length >= 1, "partial events written");
+  assert.strictEqual(rec.events.at(-1).type, "workflow.failed", "failed scripts publish a matching terminal event");
 });
 
 test("runScript: resume_from_run_id reuses matching completed agent calls", async () => {

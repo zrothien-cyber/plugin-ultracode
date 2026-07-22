@@ -96,6 +96,11 @@ test("resume with nothing to re-run logs 'all steps already completed'", async (
         assert.strictEqual(resumed.status, "completed");
         const log = events.find((e) => e.type === "log" && /all steps already completed/.test(e.message));
         assert.ok(log, "no-op branch must log 'all steps already completed'");
+        const terminal = events.at(-1);
+        assert.strictEqual(terminal.type, "workflow.completed", "resume emits a terminal lifecycle event");
+        assert.strictEqual(terminal.status, "completed");
+        const persisted = await readWorkflow({ workflow_id: wf.id });
+        assert.strictEqual(persisted.events.at(-1).type, "workflow.completed", "resume persists the terminal event");
       })
     );
   });

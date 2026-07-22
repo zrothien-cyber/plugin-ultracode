@@ -204,6 +204,9 @@ test("partial status: exactly one of two workers fails => status 'partial'", asy
     const completed = wf.workers.filter((w) => w.status === "completed");
     assert.strictEqual(failed.length, 1, "exactly one worker failed");
     assert.strictEqual(completed.length, 1, "exactly one worker completed");
+    const terminal = wf.events.at(-1);
+    assert.strictEqual(terminal.type, "workflow.partial", "partial runs publish a matching terminal event");
+    assert.strictEqual(terminal.status, "partial");
   });
 });
 

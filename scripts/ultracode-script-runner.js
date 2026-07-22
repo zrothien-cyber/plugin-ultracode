@@ -38,6 +38,7 @@ const {
 const { transformSource } = require("./script-source-transform");
 const { attachWorkflowUi, shouldLaunchUi } = require("./ultracode-ui-launcher");
 const workflowDefinitions = require("./workflow-definitions");
+const { terminalWorkflowEvent } = require("./workflow-events");
 
 // Top-level require of the engine is intentional and safe: the engine must
 // NOT top-level require this runner (it uses a lazy require wrapper), so there
@@ -809,6 +810,10 @@ async function runScript(input = {}) {
     }
     record.events = ctx.events;
   }
+
+  // A final worker event is not enough for controllers following the journal.
+  emitScriptEvent(ctx, terminalWorkflowEvent(record));
+  record.events = ctx.events;
 
   // Final write. Wrapped so a serialization failure (e.g. a non-JSON-able
   // script return value) still journals a useful failure instead of throwing

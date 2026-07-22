@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("node:fs");
 const path = require("path");
 const childProcess = require("child_process");
 
@@ -46,6 +47,13 @@ test("CLI --steps parses JSON, runs the DAG, prints the record", async () => {
   assert.strictEqual(record.options.pipeline, true);
   assert.strictEqual(record.workers.length, 2);
   assert.strictEqual(record.status, "completed");
+  const terminal = record.events.at(-1);
+  assert.strictEqual(terminal.type, "workflow.completed", "CLI record ends with a workflow terminal event");
+  assert.strictEqual(terminal.status, "completed");
+  assert.strictEqual(terminal.data.workers, 2);
+  const persisted = JSON.parse(fs.readFileSync(record.state_path, "utf8"));
+  assert.strictEqual(persisted.status, "completed", "controller persists the terminal status before exit");
+  assert.strictEqual(persisted.events.at(-1).type, "workflow.completed", "persisted journal ends with the terminal event");
   // --progress writes events to stderr.
   assert.match(stderr, /\[ultracode\]/, "progress lines emitted to stderr");
 });
