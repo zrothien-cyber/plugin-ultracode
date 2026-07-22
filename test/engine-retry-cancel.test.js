@@ -3,9 +3,11 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
+const path = require("path");
 
 const { engine, mockOpts, withMockEnv, freshCounterPath } = require("./helpers/env.js");
 const { spawnWorker, createContext } = engine;
+const STARTUP_GUARD_MOCK = path.join(__dirname, "fixtures", "mock-startup-guard.sh");
 
 // ---------------------------------------------------------------------------
 // (A) Transient-error retry / backoff
@@ -116,15 +118,13 @@ test("silent startup is terminated early and retried once without an explicit re
   const startedAt = Date.now();
   const r = await withMockEnv(
     {
-      MOCK_CODEX_SILENT_START_MS: "500",
-      MOCK_CODEX_SILENT_START_TIMES: "1",
       MOCK_CODEX_COUNTER: counter
     },
     async () =>
       spawnWorker("prompt", {
-        ...mockOpts({ timeoutMs: 1_500 }),
+        ...mockOpts({ timeoutMs: 5_000, codex_bin: STARTUP_GUARD_MOCK }),
         ctx,
-        startupTimeoutMs: 80,
+        startupTimeoutMs: 500,
         baseDelayMs: 1,
         maxDelayMs: 1,
         retryJitter: false
@@ -133,7 +133,7 @@ test("silent startup is terminated early and retried once without an explicit re
 
   assert.strictEqual(r.status, "completed", r.error);
   assert.strictEqual(parseInt(fs.readFileSync(counter, "utf8"), 10), 2, "first silent child plus one restart");
-  assert.ok(Date.now() - startedAt < 1_000, "startup guard avoids waiting for the full worker timeout");
+  assert.ok(Date.now() - startedAt < 2_000, "startup guard avoids waiting for the full worker timeout");
   const retries = events.filter((e) => e.type === "worker.retry");
   assert.strictEqual(retries.length, 1);
   assert.strictEqual(retries[0].max_retries, 1);
