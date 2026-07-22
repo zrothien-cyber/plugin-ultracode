@@ -12,13 +12,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": [
-    "src/engine-foundation.ts",
-    "src/engine-execution.ts",
-    "scripts/engine-workflows.js",
-    "scripts/engine-pipeline.js",
-    "scripts/ultracode-engine.js",
-    "scripts/engine-types.d.ts",
-    "src/**/*.ts"
-  ]
+  "include": ["src/**/*.ts", "scripts/engine-types.d.ts"]
 }

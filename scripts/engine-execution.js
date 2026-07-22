@@ -4,8 +4,8 @@ const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
 const util = require("util");
-const appServerClient = require("../scripts/app-server-client");
-const { acquireGlobalLease } = require("../scripts/global-concurrency");
+const appServerClient = require("./app-server-client");
+const { acquireGlobalLease } = require("./global-concurrency");
 const execFileP = util.promisify(childProcess.execFile);
 const DEFAULT_STARTUP_TIMEOUT_MS = 120_000;
 // Worker transports and orchestration primitives. Dependencies flow from foundation.

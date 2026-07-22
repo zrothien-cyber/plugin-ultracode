@@ -257,8 +257,8 @@ interface VerifyOptions extends WorkerOptions {
   context?: string;
 }
 
-const appServerClient: AppServerClient = require("../scripts/app-server-client");
-const { acquireGlobalLease }: typeof import("./global-concurrency") = require("../scripts/global-concurrency");
+const appServerClient: AppServerClient = require("./app-server-client");
+const { acquireGlobalLease }: typeof import("./global-concurrency") = require("./global-concurrency");
 
 const execFileP = util.promisify(childProcess.execFile);
 const DEFAULT_STARTUP_TIMEOUT_MS = 120_000;

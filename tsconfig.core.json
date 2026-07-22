@@ -8,5 +8,10 @@
     "noImplicitAny": true,
     "useUnknownInCatchVariables": true
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/engine-core.ts",
+    "src/engine-foundation.ts",
+    "src/engine-execution.ts",
+    "src/global-concurrency.ts"
+  ]
 }

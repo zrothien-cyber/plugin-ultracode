@@ -1,6 +1,6 @@
 {
   "name": "ultracode",
-  "version": "0.3.2+codex.20260722214450",
+  "version": "0.3.3+codex.20260722223728",
   "description": "Fan out Codex subprocess workers for deep code investigation, planning, review, and edits — through one command that takes a task fan-out, a barrier-free steps[] DAG, an imperative Workflow script, or a saved workflow. Adds adversarial verification, budgets, journaled resume, a live run dashboard, pluggable transports (exec / app-server), warm-context resume, and transient-error retry.",
   "author": {
     "name": "Just Every",
