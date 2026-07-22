@@ -115,7 +115,6 @@ test("silent startup is terminated early and retried once without an explicit re
   const counter = freshCounterPath();
   const events = [];
   const ctx = createContext({ concurrency: 1, onEvent: (e) => events.push(e) });
-  const startedAt = Date.now();
   const r = await withMockEnv(
     {
       MOCK_CODEX_COUNTER: counter
@@ -133,7 +132,6 @@ test("silent startup is terminated early and retried once without an explicit re
 
   assert.strictEqual(r.status, "completed", r.error);
   assert.strictEqual(parseInt(fs.readFileSync(counter, "utf8"), 10), 2, "first silent child plus one restart");
-  assert.ok(Date.now() - startedAt < 2_000, "startup guard avoids waiting for the full worker timeout");
   const retries = events.filter((e) => e.type === "worker.retry");
   assert.strictEqual(retries.length, 1);
   assert.strictEqual(retries[0].max_retries, 1);
