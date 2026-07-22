@@ -13,7 +13,7 @@
     "types": ["node"]
   },
   "include": [
-    "scripts/engine-foundation.js",
+    "src/engine-foundation.ts",
     "scripts/engine-execution.js",
     "scripts/engine-workflows.js",
     "scripts/engine-pipeline.js",
