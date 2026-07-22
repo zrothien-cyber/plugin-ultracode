@@ -14,7 +14,7 @@
   },
   "include": [
     "src/engine-foundation.ts",
-    "scripts/engine-execution.js",
+    "src/engine-execution.ts",
     "scripts/engine-workflows.js",
     "scripts/engine-pipeline.js",
     "scripts/ultracode-engine.js",
