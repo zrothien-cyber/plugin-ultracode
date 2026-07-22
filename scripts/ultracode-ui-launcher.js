@@ -6,7 +6,7 @@ const http = require("http");
 const path = require("path");
 
 const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_WAIT_MS = 2500;
+const DEFAULT_WAIT_MS = 5000;
 const STATIC_DIR = path.resolve(__dirname, "..", "ui");
 
 function parseBool(value) {
